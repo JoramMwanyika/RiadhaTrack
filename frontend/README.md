@@ -64,16 +64,48 @@ npm run build
 ## Project structure
 
 ```
-src/
-  api/client.ts          # fetch wrapper + auth header
-  components/
-    Athletes/            # list, form, profile
-    Results/             # table + compare modal
-    Devices/             # device cards
-    Dashboard.tsx
-    Layout.tsx
-    Login.tsx
-  context/AuthContext.tsx
-  hooks/usePolling.ts
-  types/index.ts
+riadha-trac-frontend/
+├── .env.example
+├── .gitignore
+├── README.md
+├── index.html
+├── package.json
+├── postcss.config.js
+├── tailwind.config.js
+├── tsconfig.json
+├── tsconfig.node.json
+├── vite.config.ts
+├── public/
+│   ├── favicon.svg
+│   └── logo.jpeg
+└── src/
+    ├── main.tsx
+    ├── App.tsx
+    ├── index.css
+    ├── api/
+    │   └── client.ts
+    ├── context/
+    │   └── AuthContext.tsx
+    ├── hooks/
+    │   └── usePolling.ts
+    ├── lib/
+    │   └── utils.ts
+    ├── types/
+    │   └── index.ts
+    └── components/
+        ├── Login.tsx
+        ├── Layout.tsx
+        ├── Dashboard.tsx
+        ├── ui/
+        │   ├── Spinner.tsx
+        │   └── StatusDot.tsx
+        ├── Athletes/
+        │   ├── AthleteList.tsx
+        │   ├── AthleteForm.tsx
+        │   └── AthleteProfile.tsx
+        ├── Results/
+        │   ├── ResultsTable.tsx
+        │   └── ResultCompare.tsx
+        └── Devices/
+            └── DeviceList.tsx
 ```
