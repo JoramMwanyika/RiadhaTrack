@@ -1,0 +1,15 @@
+# Backend service identity: consume device messages and issue acknowledgements.
+user riadha-backend
+topic read riadha/v1/devices/+/results
+topic read riadha/v1/devices/+/status
+topic read riadha/v1/devices/+/events
+topic write riadha/v1/devices/+/acks/+
+topic write riadha/v1/devices/+/commands
+
+# Create one account and the following two rules per device, substituting dev01.
+# user riadha-device-dev01
+# topic write riadha/v1/devices/dev01/results
+# topic write riadha/v1/devices/dev01/status
+# topic write riadha/v1/devices/dev01/events
+# topic read  riadha/v1/devices/dev01/acks/+
+# topic read  riadha/v1/devices/dev01/commands
