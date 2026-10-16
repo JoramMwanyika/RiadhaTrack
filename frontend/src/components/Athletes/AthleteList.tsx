@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, Search, User } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { usePolling } from '../../hooks/usePolling';
@@ -10,6 +10,7 @@ import { Spinner } from '../ui/Spinner';
 import { AthleteForm } from './AthleteForm';
 
 export function AthleteList() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { config } = useAuth();
   const canCreate = config?.features?.canCreateAthletes !== false;
 
@@ -17,7 +18,11 @@ export function AthleteList() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(searchParams.get('register') === '1');
+
+  useEffect(() => {
+    if (searchParams.get('register') === '1') setShowForm(true);
+  }, [searchParams]);
 
   const fetchAthletes = useCallback(async () => {
     try {
@@ -172,9 +177,9 @@ export function AthleteList() {
 
       {showForm && (
         <AthleteForm
-          onClose={() => setShowForm(false)}
+          onClose={() => { setShowForm(false); setSearchParams({}); }}
           onCreated={() => {
-            setShowForm(false);
+            setShowForm(false); setSearchParams({});
             setLoading(true);
             void fetchAthletes();
           }}

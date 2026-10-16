@@ -11,6 +11,7 @@ interface Props {
 
 export function AthleteForm({ onClose, onCreated }: Props) {
   const [form, setForm] = useState<CreateAthletePayload>({
+    athleteId: '',
     firstName: '',
     lastName: '',
     dateOfBirth: '',
@@ -75,6 +76,20 @@ export function AthleteForm({ onClose, onCreated }: Props) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="label">Athlete ID (keypad ID)</label>
+            <input
+              className="input"
+              inputMode="numeric"
+              pattern="[A-Za-z0-9_-]+"
+              placeholder="e.g. 101"
+              value={form.athleteId}
+              onChange={(e) => update('athleteId', e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))}
+              disabled={submitting}
+            />
+            <p className="mt-1 text-xs text-slate-500">Use this same ID on the hardware keypad. Leave blank to generate one automatically.</p>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">First name *</label>

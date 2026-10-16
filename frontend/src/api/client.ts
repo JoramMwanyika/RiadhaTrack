@@ -1,197 +1,60 @@
-import type {
-  Athlete,
-  AthleteSummary,
-  CreateAthletePayload,
-  DashboardConfig,
-  DashboardSummary,
-  Device,
-  Result,
-  ResultsFilter,
-} from '../types';
+import type { Athlete, AthleteSummary, CreateAthletePayload, DashboardConfig, DashboardSummary, Device, Result, ResultsFilter } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
+let authToken: string | null = null;
 
-/** Store credentials only in memory / sessionStorage – never in source */
-let authHeader: string | null = null;
+type ApiAthlete = { athlete_id: string; display_name: string; age_group?: string | null; school_club?: string | null; preferred_event?: string | null; consent_status: 'pending' | 'granted' | 'withdrawn'; created_at: string };
+type ApiResult = { result_id: string; athlete_id: string; device_id: string; event: string; distance_m: number; elapsed_ms: number; quality: Result['quality']; received_at: string };
+type ApiDevice = { device_id: string; label?: string | null; firmware_version?: string | null; last_seen_at?: string | null; status: Device['status'] };
 
-export function setCredentials(username: string, password: string) {
-  authHeader = 'Basic ' + btoa(`${username}:${password}`);
-  sessionStorage.setItem('rt_auth', authHeader);
+function normalizeAthlete(a: ApiAthlete): AthleteSummary {
+  return { id: a.athlete_id, displayName: a.display_name, firstName: a.display_name, lastName: '', category: a.age_group ?? undefined, school: a.school_club ?? undefined, club: undefined, consentStatus: a.consent_status === 'withdrawn' ? 'revoked' : a.consent_status, sharingStatus: 'private', createdAt: a.created_at };
+}
+function normalizeResult(r: ApiResult): Result {
+  return { id: r.result_id, athleteId: r.athlete_id, event: r.event, distance: r.distance_m, timeMs: r.elapsed_ms, deviceId: r.device_id, recordedAt: r.received_at, quality: r.quality };
+}
+function normalizeDevice(d: ApiDevice): Device {
+  return { id: d.device_id, name: d.label || d.device_id, status: d.status, lastSeenAt: d.last_seen_at ?? undefined, firmwareVersion: d.firmware_version ?? undefined };
 }
 
-export function clearCredentials() {
-  authHeader = null;
-  sessionStorage.removeItem('rt_auth');
+export function setToken(token: string) { authToken = token; sessionStorage.setItem('rt_token', token); }
+export function clearCredentials() { authToken = null; sessionStorage.removeItem('rt_token'); }
+export function loadCredentialsFromSession() { authToken = sessionStorage.getItem('rt_token'); return !!authToken; }
+export function isAuthenticated() { return !!authToken; }
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!authToken) throw { message: 'Not authenticated', status: 401 };
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { Accept: 'application/json', Authorization: `Bearer ${authToken}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+  if (response.status === 401 || response.status === 403) { clearCredentials(); throw { message: 'Authentication failed or expired', status: response.status }; }
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw { message: body.detail || body.message || response.statusText, status: response.status }; }
+  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
-export function loadCredentialsFromSession(): boolean {
-  const stored = sessionStorage.getItem('rt_auth');
-  if (stored) {
-    authHeader = stored;
-    return true;
-  }
-  return false;
+export async function loginAccount(username: string, password: string) {
+  const response = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ username, password }) });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw { message: body.detail || 'Unable to sign in', status: response.status }; }
+  return response.json() as Promise<{ access_token: string; user: { username: string; role: 'admin' | 'coach' | 'viewer' } }>;
 }
-
-export function isAuthenticated(): boolean {
-  return !!authHeader;
+export async function registerAccount(username: string, password: string) {
+  const response = await fetch(`${API_BASE}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ username, password }) });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw { message: body.detail || 'Unable to create account', status: response.status }; }
+  return response.json() as Promise<{ access_token: string; user: { username: string; role: 'admin' | 'coach' | 'viewer' } }>;
 }
-
-async function request<T>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  if (!authHeader) {
-    throw { message: 'Not authenticated', status: 401 } as const;
-  }
-
-  const headers: HeadersInit = {
-    Authorization: authHeader,
-    Accept: 'application/json',
-    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-    ...options.headers,
-  };
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
-
-  if (res.status === 401 || res.status === 403) {
-    clearCredentials();
-    throw { message: 'Authentication failed or expired', status: res.status };
-  }
-
-  if (!res.ok) {
-    let message = res.statusText;
-    try {
-      const body = await res.json();
-      message = body.message || body.error || message;
-    } catch {
-      /* ignore */
-    }
-    throw { message, status: res.status };
-  }
-
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  return res.json() as Promise<T>;
-}
-
-// ---------- Public API helpers ----------
 
 export async function getDashboardConfig(): Promise<DashboardConfig> {
-  return request<DashboardConfig>('/dashboard-config');
+  const [config, user] = await Promise.all([request<{ poll_interval_seconds?: number }>('/dashboard-config'), request<{ username: string; role: 'admin' | 'coach' | 'viewer' }>('/auth/me')]);
+  return { refreshIntervalMs: (config.poll_interval_seconds ?? 5) * 1000, user, features: { canCreateAthletes: true, canEditResults: false, canExport: false } };
 }
-
-export async function getDashboardSummary(): Promise<DashboardSummary> {
-  // Backend may expose this as part of config or a dedicated endpoint.
-  // For MVP we derive from existing endpoints if needed.
-  const [athletes, results, devices] = await Promise.all([
-    getAthletes({ limit: 1 }),
-    getResults({ limit: 10 }),
-    getDevices(),
-  ]);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const testsToday = results.filter((r) =>
-    r.recordedAt.startsWith(today)
-  ).length;
-
-  return {
-    athleteCount: athletes.length, // note: if backend supports total count, prefer that
-    testsToday,
-    recentResults: results.slice(0, 8),
-    devicesOnline: devices.filter((d) => d.status === 'online').length,
-    devicesTotal: devices.length,
-    lastUpdated: new Date().toISOString(),
-  };
-}
-
-export async function getAthletes(params?: {
-  query?: string;
-  limit?: number;
-}): Promise<AthleteSummary[]> {
-  const search = new URLSearchParams();
-  if (params?.query) search.set('query', params.query);
-  if (params?.limit) search.set('limit', String(params.limit));
-  const qs = search.toString();
-  return request<AthleteSummary[]>(`/athletes${qs ? `?${qs}` : ''}`);
-}
-
-export async function getAthlete(id: string): Promise<Athlete> {
-  return request<Athlete>(`/athletes/${id}`);
-}
-
-export async function createAthlete(
-  payload: CreateAthletePayload
-): Promise<Athlete> {
-  return request<Athlete>('/athletes', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function getAthleteResults(id: string): Promise<Result[]> {
-  return request<Result[]>(`/athletes/${id}/results`);
-}
-
-export async function getResults(
-  filters: ResultsFilter = {}
-): Promise<Result[]> {
-  const search = new URLSearchParams();
-  Object.entries(filters).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== '') {
-      search.set(k, String(v));
-    }
-  });
-  const qs = search.toString();
-  return request<Result[]>(`/results${qs ? `?${qs}` : ''}`);
-}
-
+export async function getDashboardSummary(): Promise<DashboardSummary> { const [athletes, recentResults, devices] = await Promise.all([getAthletes(), getResults(), getDevices()]); return { athleteCount: athletes.length, testsToday: recentResults.filter(r => r.recordedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)).length, recentResults: recentResults.slice(0, 8), devicesOnline: devices.filter(d => d.status === 'online').length, devicesTotal: devices.length, lastUpdated: new Date().toISOString() }; }
+export async function getAthletes(params?: { query?: string; limit?: number }): Promise<AthleteSummary[]> { const q = params?.query ? `?query=${encodeURIComponent(params.query)}` : ''; return (await request<ApiAthlete[]>(`/athletes${q}`)).slice(0, params?.limit ?? Infinity).map(normalizeAthlete); }
+export async function getAthlete(id: string): Promise<Athlete> { return normalizeAthlete(await request<ApiAthlete>(`/athletes/${id}`)); }
+export async function createAthlete(payload: CreateAthletePayload): Promise<Athlete> { const displayName = [payload.firstName, payload.lastName].filter(Boolean).join(' ').trim(); const athleteId = payload.athleteId?.trim() || `${displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'athlete'}-${Date.now().toString().slice(-6)}`; return normalizeAthlete(await request<ApiAthlete>('/athletes', { method: 'POST', body: JSON.stringify({ athlete_id: athleteId, display_name: displayName, age_group: payload.category || null, school_club: [payload.school, payload.club].filter(Boolean).join(' · ') || null, preferred_event: null, consent_status: payload.consentStatus === 'revoked' || payload.consentStatus === 'unknown' ? 'pending' : payload.consentStatus }) })); }
+export async function getAthleteResults(id: string): Promise<Result[]> { return (await request<ApiResult[]>(`/athletes/${id}/results`)).map(normalizeResult); }
+export async function getResults(filters: ResultsFilter = {}): Promise<Result[]> { const search = new URLSearchParams(); if (filters.event) search.set('event', filters.event); if (filters.distance) search.set('distance_m', String(filters.distance)); if (filters.athleteId) search.set('athlete_id', filters.athleteId); if (filters.deviceId) search.set('device_id', filters.deviceId); if (filters.dateFrom) search.set('from', filters.dateFrom); if (filters.dateTo) search.set('to', filters.dateTo); const results = (await request<ApiResult[]>(`/results${search.size ? `?${search}` : ''}`)).map(normalizeResult); return results.slice(0, filters.limit ?? Infinity); }
 export async function getDevices(): Promise<Device[]> {
-  return request<Device[]>('/devices');
+  const [devices, results] = await Promise.all([request<ApiDevice[]>('/devices'), getResults({ limit: 500 })]);
+  return devices.map(normalizeDevice).map(device => ({ ...device, lastResult: results.find(result => result.deviceId === device.id) }));
 }
-
-/** Format milliseconds to human-readable time (e.g. 12.34 or 1:23.45) */
-export function formatTime(ms: number): string {
-  if (ms < 0 || !Number.isFinite(ms)) return '—';
-  const totalSeconds = ms / 1000;
-  if (totalSeconds < 60) {
-    return totalSeconds.toFixed(2);
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toFixed(2).padStart(5, '0')}`;
-}
-
-export function qualityLabel(q: Result['quality']): string {
-  switch (q) {
-    case 'official':
-      return 'Official';
-    case 'prototype':
-      return 'Prototype (unverified)';
-    case 'unverified':
-      return 'Unverified';
-    case 'manual':
-      return 'Manual entry';
-    default:
-      return String(q);
-  }
-}
-
-export function qualityClass(q: Result['quality']): string {
-  switch (q) {
-    case 'official':
-      return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
-    case 'prototype':
-    case 'unverified':
-      return 'bg-amber-500/15 text-amber-400 border border-amber-500/30';
-    case 'manual':
-      return 'bg-slate-500/15 text-slate-400 border border-slate-500/30';
-    default:
-      return 'bg-slate-500/15 text-slate-400';
-  }
-}
+export function formatTime(ms: number) { if (!Number.isFinite(ms) || ms < 0) return '—'; const seconds = ms / 1000; return seconds < 60 ? `${seconds.toFixed(2)}s` : `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, '0')}`; }
+export function qualityLabel(q: Result['quality']) { return q === 'official' ? 'Official' : q === 'manual' ? 'Manual' : 'Unverified'; }
+export function qualityClass(q: Result['quality']) { return q === 'official' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'; }

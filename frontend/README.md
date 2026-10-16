@@ -1,111 +1,20 @@
-# RiadhaTrac Frontend
+# RiadhaTrac frontend
 
-Local browser dashboard for coaches and administrators on the same network as the RiadhaTrac backend.
+This is a dependency-free local dashboard. It connects to the FastAPI backend,
+which is the only component allowed to read or write the SQLite database.
 
-## Features
+## Run locally
 
-- **HTTP Basic authentication** – credentials stored only in sessionStorage, cleared on logout or 401
-- **Dashboard** – athlete count, tests today, recent results, device online/offline status
-- **Athletes** – search, create profiles, view consent/sharing status, best & latest results, full history
-- **Results** – filterable table (athlete, event, distance, date range, school/club, device) + comparison of equivalent results only
-- **Devices** – last-seen, firmware, status, last result; live refresh
-- **Polling** – uses `refreshIntervalMs` from `GET /api/dashboard-config` (defaults to 5 s)
+Start the backend first from `../backend`, then serve this directory:
 
-## Stack
-
-- React 18 + TypeScript
-- Vite
-- Tailwind CSS
-- React Router 6
-- Lucide icons
-- date-fns
-
-## Quick start
-
-```bash
-cd riadha-trac-frontend
-npm install
-npm run dev
+```powershell
+cd RiadhaTrack\frontend
+python -m http.server 5173
 ```
 
-Open http://localhost:5173
+Open `http://127.0.0.1:5173`. Sign in with the backend's initial admin account.
+The default API address is `http://127.0.0.1:8000`; change it on the login page
+when accessing the backend through a LAN IP.
 
-The Vite dev server proxies `/api` → `http://localhost:8080` (see `vite.config.ts`).  
-Point the backend to the same host or set `VITE_API_BASE` in a `.env` file.
-
-## Backend contract
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/dashboard-config` | Auth check + refresh interval + feature flags |
-| `GET /api/athletes?query=` | Directory / search |
-| `POST /api/athletes` | Create athlete |
-| `GET /api/athletes/{id}` | Profile |
-| `GET /api/athletes/{id}/results` | Result history |
-| `GET /api/results` | Filtered results |
-| `GET /api/devices` | Device status |
-
-All requests send `Authorization: Basic …`. On 401/403 the UI returns to the login screen.
-
-## Privacy notes
-
-- Consent status is always visible on athlete profiles.
-- Prototype / unverified timings are labelled as non-official.
-- Comparison only allows results that share event + distance + protocol + category.
-- No MQTT credentials, device secrets, or broker details ever reach the browser.
-
-## Build for production
-
-```bash
-npm run build
-# serve the dist/ folder behind the same origin as the API, or configure CORS
-```
-
-## Project structure
-
-```
-riadha-trac-frontend/
-├── .env.example
-├── .gitignore
-├── README.md
-├── index.html
-├── package.json
-├── postcss.config.js
-├── tailwind.config.js
-├── tsconfig.json
-├── tsconfig.node.json
-├── vite.config.ts
-├── public/
-│   ├── favicon.svg
-│   └── logo.jpeg
-└── src/
-    ├── main.tsx
-    ├── App.tsx
-    ├── index.css
-    ├── api/
-    │   └── client.ts
-    ├── context/
-    │   └── AuthContext.tsx
-    ├── hooks/
-    │   └── usePolling.ts
-    ├── lib/
-    │   └── utils.ts
-    ├── types/
-    │   └── index.ts
-    └── components/
-        ├── Login.tsx
-        ├── Layout.tsx
-        ├── Dashboard.tsx
-        ├── ui/
-        │   ├── Spinner.tsx
-        │   └── StatusDot.tsx
-        ├── Athletes/
-        │   ├── AthleteList.tsx
-        │   ├── AthleteForm.tsx
-        │   └── AthleteProfile.tsx
-        ├── Results/
-        │   ├── ResultsTable.tsx
-        │   └── ResultCompare.tsx
-        └── Devices/
-            └── DeviceList.tsx
-```
+The dashboard uses the protected API to load athletes, results, and devices,
+and to create athlete records. It does not access SQLite or MQTT directly.

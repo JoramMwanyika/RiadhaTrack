@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import os
+import secrets
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -19,3 +20,11 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(expected, stored)
     except (ValueError, UnicodeDecodeError):
         return False
+
+
+def new_session_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()

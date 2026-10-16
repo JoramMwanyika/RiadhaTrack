@@ -35,3 +35,13 @@ class DeviceResult(BaseModel):
     timing: TimingPayload
     device_time_utc: datetime | None = None
     sequence: int | None = Field(default=None, ge=0)
+
+
+class AccountRegistration(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=6, max_length=256)
+
+
+class AccountLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)

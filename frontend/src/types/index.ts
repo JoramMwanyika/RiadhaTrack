@@ -103,6 +103,7 @@ export interface ResultsFilter {
 }
 
 export interface CreateAthletePayload {
+  athleteId?: string;
   firstName: string;
   lastName: string;
   dateOfBirth?: string;

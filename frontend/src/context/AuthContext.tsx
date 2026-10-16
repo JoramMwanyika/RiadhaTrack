@@ -12,7 +12,9 @@ import {
   getDashboardConfig,
   isAuthenticated,
   loadCredentialsFromSession,
-  setCredentials,
+  loginAccount,
+  registerAccount,
+  setToken,
 } from '../api/client';
 import type { DashboardConfig } from '../types';
 
@@ -22,6 +24,7 @@ interface AuthState {
   config: DashboardConfig | null;
   error: string | null;
   login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string) => Promise<void>;
   logout: () => void;
   refreshConfig: () => Promise<void>;
 }
@@ -86,8 +89,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (username: string, password: string) => {
       setError(null);
-      setCredentials(username, password);
       try {
+        const session = await loginAccount(username, password);
+        setToken(session.access_token);
         await refreshConfig();
         setIsLoggedIn(true);
       } catch (err: unknown) {
@@ -104,6 +108,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [refreshConfig]
   );
 
+  const register = useCallback(async (username: string, password: string) => {
+    setError(null);
+    try {
+      const session = await registerAccount(username, password);
+      setToken(session.access_token);
+      await refreshConfig();
+      setIsLoggedIn(true);
+    } catch (err: unknown) {
+      clearCredentials();
+      setIsLoggedIn(false);
+      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : 'Registration failed';
+      setError(msg);
+      throw err;
+    }
+  }, [refreshConfig]);
+
   const logout = useCallback(() => {
     clearCredentials();
     setIsLoggedIn(false);
@@ -118,10 +138,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       config,
       error,
       login,
+      register,
       logout,
       refreshConfig,
     }),
-    [isLoggedIn, isLoading, config, error, login, logout, refreshConfig]
+    [isLoggedIn, isLoading, config, error, login, register, logout, refreshConfig]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

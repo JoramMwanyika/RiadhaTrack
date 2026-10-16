@@ -37,6 +37,11 @@ def initialize_database() -> None:
                 user_id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL, created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS athletes (
                 athlete_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
                 age_group TEXT, school_club TEXT, preferred_event TEXT,

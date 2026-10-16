@@ -4,6 +4,10 @@ import {
   Users,
   Table2,
   Cpu,
+  Trophy,
+  UserPlus,
+  Search,
+  Bell,
   LogOut,
   Menu,
   X,
@@ -16,7 +20,9 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/athletes', label: 'Athletes', icon: Users },
   { to: '/results', label: 'Results', icon: Table2 },
+  { to: '/results', label: 'Rankings', icon: Trophy },
   { to: '/devices', label: 'Devices', icon: Cpu },
+  { to: '/athletes?register=1', label: 'Register athlete', icon: UserPlus },
 ];
 
 export function Layout() {
@@ -30,15 +36,11 @@ export function Layout() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row">
+    <div className="app-shell min-h-screen flex flex-col md:flex-row">
       {/* Mobile header */}
       <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-surface-900">
         <div className="flex items-center gap-2">
-          <img
-            src="/logo.jpeg"
-            alt="RiadhaTrack"
-            className="h-9 w-auto object-contain rounded"
-          />
+          <img src="/riadha-track-logo.png" alt="RiadhaTrack" className="h-9 w-auto object-contain rounded" />
         </div>
         <button
           className="btn-ghost p-2"
@@ -52,17 +54,13 @@ export function Layout() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'w-64 shrink-0 border-r border-slate-800 bg-surface-900/95 flex flex-col',
+          'app-sidebar w-64 shrink-0 border-r border-slate-800 bg-surface-900/95 flex flex-col',
           'md:flex',
           mobileOpen ? 'flex' : 'hidden'
         )}
       >
         <div className="hidden md:flex items-center justify-center px-4 py-4 border-b border-slate-800">
-          <img
-            src="/logo.jpeg"
-            alt="RiadhaTrack"
-            className="h-14 w-auto object-contain rounded"
-          />
+          <img src="/riadha-track-logo.png" alt="RiadhaTrack" className="h-12 w-auto object-contain rounded" />
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
@@ -76,7 +74,7 @@ export function Layout() {
                 cn(
                   'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-brand-600/20 text-brand-300 border border-brand-500/30'
+                    ? 'bg-brand-400 text-surface-950 shadow-[0_0_22px_rgba(163,230,53,.3)]'
                     : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
                 )
               }
@@ -111,6 +109,7 @@ export function Layout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-auto">
+        <header className="app-topbar hidden md:flex"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500"/><input className="app-search" placeholder="Search athletes, events…" onKeyDown={e => { if (e.key === 'Enter') navigate(`/athletes?query=${encodeURIComponent((e.target as HTMLInputElement).value)}`); }}/></div><div className="ml-auto flex items-center gap-5 text-xs"><span className="text-brand-300">● <span className="text-slate-300">System Online</span></span><Bell className="h-4 w-4 text-slate-300"/><span className="h-7 w-7 rounded-full bg-brand-300 text-surface-950 flex items-center justify-center font-bold">{config?.user?.username?.[0]?.toUpperCase() || 'C'}</span></div></header>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <Outlet />
         </div>

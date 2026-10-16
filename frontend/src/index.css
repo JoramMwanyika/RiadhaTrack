@@ -8,6 +8,7 @@
   }
   body {
     @apply h-full min-h-screen bg-surface-950 text-slate-100;
+    background-image: radial-gradient(circle at 12% 0%, rgba(28, 90, 140, .36), transparent 30%), linear-gradient(135deg, #020b18, #061b35 58%, #07152a);
   }
   #root {
     @apply h-full min-h-screen;
@@ -16,13 +17,13 @@
 
 @layer components {
   .card {
-    @apply rounded-xl border border-slate-800 bg-surface-900/80 backdrop-blur-sm shadow-lg;
+    @apply rounded-lg border border-sky-800/70 bg-[#041832]/90 backdrop-blur-sm shadow-lg;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-surface-950 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-500 active:bg-brand-700;
+    @apply btn bg-brand-400 text-surface-950 hover:bg-brand-300 active:bg-brand-500;
   }
   .btn-secondary {
     @apply btn bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700;
@@ -34,7 +35,7 @@
     @apply btn text-slate-300 hover:bg-slate-800 hover:text-white;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-700 bg-surface-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500;
+    @apply w-full rounded-md border border-sky-800 bg-[#03152b] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-400;
   }
   .label {
     @apply block text-xs font-medium uppercase tracking-wider text-slate-400 mb-1.5;
@@ -49,6 +50,24 @@
     @apply px-4 py-3 text-sm text-slate-200;
   }
 }
+
+.app-shell { background: linear-gradient(135deg, #020b18, #062145 75%); }
+.app-sidebar { background: rgba(2, 16, 34, .95); box-shadow: 12px 0 40px rgba(0, 0, 0, .13); }
+.app-topbar { height: 46px; align-items: center; padding: 0 28px; border-bottom: 1px solid rgba(25, 105, 162, .6); background: rgba(2, 15, 32, .72); }
+.app-search { width: 240px; padding: 6px 12px 6px 31px; border: 1px solid #1c5687; border-radius: 5px; background: #082347; color: #dbeafe; font-size: 11px; }
+.app-search:focus { outline: 1px solid #a3e635; }
+
+.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 34px; background: radial-gradient(circle at 8% 10%, #17457c 0, transparent 32%), radial-gradient(circle at 85% 90%, #123c69 0, transparent 34%), #020b19; }
+.auth-shell { width: min(1180px, 100%); min-height: 720px; display: grid; grid-template-columns: 1.05fr .95fr; overflow: hidden; border: 1px solid #1d689f; border-radius: 13px; background: #03142a; box-shadow: 0 24px 90px rgba(0,0,0,.45); }
+.auth-brand-panel { position: relative; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #165685; background: linear-gradient(150deg, rgba(0,14,31,.7), rgba(0,25,46,.38)), url('/kenya-athletes.jpg'); background-position: center; background-size: cover; }
+.auth-brand-panel:after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, transparent 35%, rgba(0, 8, 22, .3) 60%, #041a35 100%); }
+.auth-brand { position: relative; z-index: 1; padding: 45px 45px 0; }.auth-brand img { display:block; width: 255px; height: 85px; object-fit: contain; object-position: left center; }.auth-brand span { display:block; margin-top: 8px; color: #d6e2fb; letter-spacing: 2.5px; font-size: 10px; font-weight: 700; }.auth-brand b { display:inline-block; width: 4px; height: 4px; margin: 0 9px 2px; border-radius: 99px; background:#a3e635; }
+.runner-glow { position:absolute; z-index: 0; inset: 24% -15% 15% 15%; border-radius: 50%; background: radial-gradient(ellipse, rgba(147, 234, 41, .16), transparent 55%); transform: rotate(-20deg); }
+.auth-tagline { position: relative; z-index: 1; margin: auto 45px 90px; }.auth-tagline h2 { margin:0; color:#fff; font-size: 35px; line-height: 1.08; font-weight:800; }.auth-tagline em, .auth-form-wrap h1 em { color: #aaff39; font-style: normal; }.auth-tagline p { margin-top: 15px; color:#d8e5ff; font-size:16px; line-height:1.45; }
+.auth-brand-panel footer { position:absolute; z-index:1; bottom:0; display:flex; align-items:center; gap:14px; width:100%; height:52px; padding:0 34px; border-top:1px solid #15527e; color:#bdcef0; font-size:11px; }.auth-brand-panel footer span { color:#aaff39; font-size:22px; }.auth-brand-panel footer strong{ color:white; }.auth-brand-panel footer i { width:3px; height:3px; border-radius:50%; background:#aaff39; }
+.auth-form-panel { display:flex; align-items:center; justify-content:center; position:relative; background:linear-gradient(145deg,#061c38,#031126); }.auth-tabs { position:absolute; top:25px; right:35px; display:flex; gap:10px; }.auth-tabs button,.auth-switch button { background:none; border:0; color:#9fc0ed; cursor:pointer; font-size:13px; }.auth-tabs .active,.auth-switch button { color:#aaff39; font-weight:700; }
+.auth-form-wrap { width:min(405px, calc(100% - 48px)); }.eyebrow{ font-size:10px; font-weight:700; color:#94b6df; letter-spacing:2px; }.auth-form-wrap h1 { margin:10px 0 8px; font-size:37px; letter-spacing:-1.2px; }.auth-subtitle { margin:0 0 34px; color:#cbd8ee; font-size:15px; }.auth-form { display:grid; gap:18px; }.auth-form label { color:#eef5ff; font-size:13px; }.auth-input { display:flex; align-items:center; gap:10px; margin-top:8px; padding:0 12px; height:47px; border:1px solid #1f6da3; border-radius:7px; background:#03172f; color:#c8d9f5; }.auth-input input { flex:1; width:100%; border:0; outline:0; background:transparent; color:#fff; font-size:14px; }.auth-input input::placeholder{color:#7fa5d3}.auth-input button{border:0;background:transparent;color:#bfd6f6;cursor:pointer}.field-help { display:flex; gap:6px; margin:-10px 0 0; color:#8ba9d2; font-size:11px; }.auth-error { border:1px solid rgba(248,113,113,.5); border-radius:6px; padding:10px 12px; background:rgba(127,29,29,.2); color:#fecaca; font-size:13px; }.auth-submit { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; height:48px; margin-top:10px; border:0; border-radius:7px; background:#aaff39; color:#071424; cursor:pointer; font-weight:800; font-size:14px; box-shadow:0 0 26px rgba(170,255,57,.16); }.auth-submit:hover{background:#c1ff67}.auth-submit:disabled{opacity:.7;cursor:wait}.auth-switch{text-align:center;color:#b9ccec;font-size:13px;margin-top:27px}
+@media (max-width: 800px) { .auth-screen{padding:0}.auth-shell{min-height:100vh;border:0;border-radius:0;grid-template-columns:1fr}.auth-brand-panel{display:none}.auth-form-panel{min-height:100vh}.auth-tabs{right:24px}.app-topbar{display:none} }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {

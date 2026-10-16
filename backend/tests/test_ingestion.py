@@ -8,7 +8,8 @@ def test_result_is_idempotent(monkeypatch, tmp_path):
     initialize_database()
     with connection() as db:
         db.execute("INSERT INTO athletes VALUES ('ATH001', 'Jane Doe', NULL, NULL, NULL, 'granted', '2026-01-01T00:00:00Z')")
-    event = DeviceResult.model_validate({
+    validate_fn = getattr(DeviceResult, "model_validate", getattr(DeviceResult, "parse_obj", None))
+    event = validate_fn({
         "schema_version": 1, "event_type": "timing.result.completed", "result_id": "dev01-1",
         "device_id": "dev01", "athlete_id": "ATH001",
         "test": {"sport": "athletics", "event": "sprint", "distance_m": 100},

@@ -41,7 +41,8 @@ class MqttIngestor:
         try:
             body = json.loads(message.payload.decode("utf-8"))
             result_id = body.get("result_id", result_id)
-            payload = DeviceResult.model_validate(body)
+            validate_fn = getattr(DeviceResult, "model_validate", getattr(DeviceResult, "parse_obj", None))
+            payload = validate_fn(body)
             if payload.device_id != device_id:
                 status, reason = "rejected", "topic_device_mismatch"
             else:

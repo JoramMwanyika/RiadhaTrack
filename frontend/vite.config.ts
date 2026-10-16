@@ -9,7 +9,7 @@ export default defineConfig({
     proxy: {
       // Proxy API calls to the local RiadhaTrac backend during development
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },

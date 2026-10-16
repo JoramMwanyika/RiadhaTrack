@@ -1,88 +1,81 @@
 # RiadhaTrac timing hardware (ESP8266)
 
-This firmware runs directly on a NodeMCU-style ESP8266. It connects to local Wi-Fi and Mosquitto itself; an Arduino Uno or serial MQTT gateway is not used.
+This firmware runs directly on a NodeMCU ESP8266 board. It connects to local Wi-Fi and interfaces directly with the FastAPI backend database and Mosquitto broker.
 
-## What it does
+## Hardware and Pinout
 
-- Displays the RiadhaTrac welcome/menu flow on a 20×4 I2C LCD.
-- Accepts a numeric athlete ID using a 3×4 keypad.
-- Uses hardware interrupts for separate start and finish gates.
-- Creates a durable EEPROM-backed result before it attempts MQTT delivery.
-- Publishes the result directly to MQTT at QoS 1 and removes it only after the backend's `stored` ACK.
-- Retries a pending result every 10 seconds after Wi-Fi/broker recovery.
+| Component | Connection on module | ESP8266 pin label on board | GPIO | Notes |
+|---|---|---|---|---|
+| **LCD (I²C)** | SDA | IO4 | GPIO4 | I²C data line |
+| **LCD (I²C)** | SCL | IO5 | GPIO5 | I²C clock line |
+| **LCD** | GND | GND | — | Power ground |
+| **LCD** | VCC | 3V3 / Vin | — | 3.3V or 5V with level-friendly I²C |
+| **Keypad** | R1 | IO14 | GPIO14 | Row 1 |
+| **Keypad** | R2 | IO12 | GPIO12 | Row 2 |
+| **Keypad** | R3 | IO13 | GPIO13 | Row 3 |
+| **Keypad** | R4 | IO15 | GPIO15 | Row 4 |
+| **Keypad** | C1 | IO0 | GPIO0 | Column 1 |
+| **Keypad** | C2 | IO2 | GPIO2 | Column 2 |
+| **Keypad** | C3 | RXD0 | GPIO3 | Column 3 |
+| **Keypad** | C4 | TXD0 | GPIO1 | Column 4 |
+| **IR Sensor** | OUT / DO | IO16 | GPIO16 | High-speed optical finish gate |
+| **IR Sensor** | GND | GND | — | Power ground |
+| **IR Sensor** | VCC | 3V3 | — | 3.3V power |
 
-This is a single-slot pending queue for the ESP8266 prototype. Do not power-cycle-test it with more than one unsynchronised result. A larger queue needs an ESP8266 LittleFS implementation or external storage.
+## Operator & Screen Flow (16×2 LCD)
 
-## Hardware and wiring
+1. **Power On / Boot**:
+   - The 16×2 LCD displays for **4 seconds**:
+     ```text
+        RiadhaTrac   
+     Welcome athlete!
+     ```
+2. **Main Menu**:
+   - The LCD presents two options:
+     ```text
+     1:Select 2:Start
+     Ath: Eliud
+     ```
+     *(Shows `No athlete sel.` if no athlete has been selected yet).*
+3. **Select Athlete (`1`)**:
+   - Press **`1`** on the keypad:
+     ```text
+     Enter ID: 101   
+     #=OK      *=Back
+     ```
+   - Enter digits `0`–`9` (`*` backspaces, `#` confirms).
+   - The ESP8266 queries the database (`GET /api/device/athlete/<id>`) over Wi-Fi.
+   - When found, it fetches the athlete's **first name** from SQLite:
+     ```text
+     Ath: Eliud      
+     2:Start   *:Menu
+     ```
+   - If not found in SQLite:
+     ```text
+     Athlete Not inDB
+     *=Back to Menu  
+     ```
+4. **Start Timer (`2`)**:
+   - Press **`2`**: The timer starts counting immediately:
+     ```text
+     Run: Eliud      
+     Time: 3.420 s   
+     ```
+   - When the runner reaches the IR sensor (connected to GPIO16), the beam triggers and the timer stops automatically.
+   - The result is immediately recorded under that athlete in the SQLite database (`POST /api/device/results` & MQTT).
+   - Once stored, the LCD displays:
+     ```text
+     Time: 11.840 s  
+     Saved! 2=Run #=M
+     ```
+   - Pressing **`2`** immediately runs the timer again for the same athlete, or **`#`** / **`*`** returns to the main menu.
 
-| Part | ESP8266 NodeMCU pin | GPIO | Notes |
-| --- | --- | --- | --- |
-| LCD SDA | D2 | GPIO4 | I2C bus |
-| LCD SCL | D1 | GPIO5 | I2C bus |
-| PCF8574 keypad expander SDA/SCL | D2 / D1 | GPIO4 / GPIO5 | Shares I2C with the LCD |
-| Start gate | D5 | GPIO14 | Uses `INPUT_PULLUP` and falling-edge interrupt |
-| Finish gate | D6 | GPIO12 | Uses `INPUT_PULLUP` and falling-edge interrupt |
-| 3×4 keypad rows | PCF8574 P0–P3 | — | Rows |
-| 3×4 keypad columns | PCF8574 P4–P6 | — | Columns; P7 unused |
+## Uploading to ESP8266
 
-Use a 20×4 I2C LCD at address `0x27` and a PCF8574 at `0x20` by default. Change the configuration macros if your modules use other addresses.
-
-Connect each gate between its pin and GND only when its output is open-drain/relay compatible. If a sensor has a push-pull 5V output, level-shift it before connecting to the 3.3V ESP8266. Never apply 5V to an ESP8266 GPIO. Matched break-beam gates are preferable to reflective IR sensors for outdoor timing.
-
-## Configure device secrets
-
-1. Copy the template:
-
+1. Ensure `Hardware/include/secrets.h` is configured with your Wi-Fi SSID, password, and the LAN IP of your backend laptop.
+2. Connect the ESP8266 via USB.
+3. Build and upload with PlatformIO:
    ```powershell
-   Copy-Item include\secrets.example.h include\secrets.h
+   cd Hardware
+   pio run --target upload
    ```
-
-2. Edit `include/secrets.h` and set Wi-Fi credentials, the local Mosquitto IP, and the device's dedicated MQTT username/password.
-
-3. Set a unique `RIADHA_DEVICE_ID` for every physical device. Its ID must match the account and ACL configured in `backend/infra/mosquitto/aclfile`.
-
-`secrets.h` is ignored by Git. Do not place real Wi-Fi or MQTT credentials in `secrets.example.h` or source files.
-
-## MQTT behavior
-
-With device ID `dev01` and the default prefix, the firmware publishes results to:
-
-```text
-riadha/v1/devices/dev01/results
-```
-
-It subscribes to:
-
-```text
-riadha/v1/devices/dev01/acks/+
-```
-
-The backend validates the payload and sends a `stored` ACK only after the SQLite transaction succeeds. The device therefore retains an event during Wi-Fi, broker, or backend outages. Topic ACLs and backend setup are documented in [../backend/README.md](../backend/README.md).
-
-## Build and upload
-
-Install PlatformIO, connect the ESP8266 by USB, then:
-
-```powershell
-cd RiadhaTrack\Hardware
-pio run
-pio run --target upload
-```
-
-Change `upload_port` in `platformio.ini` only if PlatformIO cannot find the board automatically.
-
-## Operator flow
-
-1. Power on: the welcome screen appears for three seconds.
-2. Press `1`, enter the numeric athlete ID, then press `#`.
-3. Confirm the athlete with `#`, which arms the start gate.
-4. The LCD changes from `Ready at Start` to `Running` at the start edge.
-5. The finish edge records elapsed milliseconds and shows the result.
-6. `Saved` appears only after the backend ACK; otherwise the result stays `Pending Sync` and automatically retries.
-
-The backend remains responsible for confirming that an athlete ID exists. Register athletes in the dashboard before testing; an unknown ID is rejected safely and remains visible to the operator as pending.
-
-## Field validation
-
-Before relying on recorded times, test both sensor polarity and placement, repeated-trigger lockout, missed gates, timing repeatability, Wi-Fi recovery, broker restart recovery, and ESP8266 power interruption. Results remain labelled `prototype_optical_sensor` and must not be treated as official timing until validated.
-

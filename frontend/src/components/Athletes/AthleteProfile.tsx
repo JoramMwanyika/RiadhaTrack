@@ -87,6 +87,7 @@ export function AthleteProfile() {
       bestByEvent.set(key, r);
     }
   }
+  const personalBest = results.length ? Math.min(...results.map((r) => r.timeMs)) : null;
 
   return (
     <div className="space-y-6">
@@ -145,6 +146,12 @@ export function AthleteProfile() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="card p-4"><p className="text-xs uppercase tracking-wider text-slate-500">Recorded results</p><p className="mt-1 text-2xl font-bold text-white">{results.length}</p></div>
+        <div className="card p-4"><p className="text-xs uppercase tracking-wider text-slate-500">Personal best</p><p className="mt-1 text-2xl font-bold text-brand-300">{personalBest === null ? '—' : formatTime(personalBest)}</p></div>
+        <div className="card p-4"><p className="text-xs uppercase tracking-wider text-slate-500">Latest result</p><p className="mt-1 text-2xl font-bold text-white">{sorted[0] ? formatTime(sorted[0].timeMs) : '—'}</p></div>
       </div>
 
       {/* Best results */}
