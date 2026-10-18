@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Shield, Share2, AlertTriangle } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Shield, Share2, AlertTriangle, Trash2 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { usePolling } from '../../hooks/usePolling';
 import {
   getAthlete,
   getAthleteResults,
+  deleteAthlete,
   formatTime,
   qualityClass,
   qualityLabel,
@@ -19,10 +21,13 @@ import { Spinner } from '../ui/Spinner';
 
 export function AthleteProfile() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { config } = useAuth();
   const [athlete, setAthlete] = useState<Athlete | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -73,6 +78,24 @@ export function AthleteProfile() {
   }
 
   if (!athlete) return null;
+
+  const canDelete = config?.user?.role === 'admin';
+  async function handleDelete() {
+    if (!id || !window.confirm(`Delete ${athleteDisplayName(athlete!)}? This cannot be undone.`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteAthlete(id);
+      navigate('/athletes');
+    } catch (err: unknown) {
+      const msg = err && typeof err === 'object' && 'message' in err
+        ? String((err as { message: string }).message)
+        : 'Failed to delete athlete';
+      setError(msg);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const consentOk = athlete.consentStatus === 'granted';
   const sorted = [...results].sort(
@@ -133,8 +156,20 @@ export function AthleteProfile() {
               <Share2 className="h-3.5 w-3.5" />
               {athlete.sharingStatus}
             </span>
+            {canDelete && (
+              <button className="btn-danger" onClick={() => void handleDelete()} disabled={deleting}>
+                <Trash2 className="h-4 w-4" />
+                {deleting ? 'Deleting...' : 'Delete athlete'}
+              </button>
+            )}
           </div>
         </div>
+
+        {error && (
+          <div className="mt-4 rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
 
         {!consentOk && (
           <div className="mt-4 rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 text-sm text-amber-200 flex items-start gap-2">

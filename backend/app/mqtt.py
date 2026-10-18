@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from .config import settings
 from .schemas import DeviceResult
-from .services import store_device_result
+from .services import queue_device_result
 from .topics import device_results, result_ack
 
 LOGGER = logging.getLogger(__name__)
@@ -46,10 +46,20 @@ class MqttIngestor:
             if payload.device_id != device_id:
                 status, reason = "rejected", "topic_device_mismatch"
             else:
-                status, reason = store_device_result(payload)
+                status, reason = queue_device_result(payload)
         except (json.JSONDecodeError, ValidationError):
             status, reason = "rejected", "invalid_payload"
+        # Pending results deliberately remain unacknowledged until a coach reviews
+        # them in the dashboard. The device will safely retry in the meantime.
+        if status == "pending":
+            return
         ack = {"result_id": result_id, "status": "stored" if status in ("stored", "duplicate") else "rejected"}
         if reason:
             ack["reason"] = reason
         client.publish(result_ack(device_id, result_id), json.dumps(ack), qos=1, retain=False)
+
+    def publish_result_ack(self, device_id: str, result_id: str, status: str, reason: str | None = None) -> None:
+        ack = {"result_id": result_id, "status": status}
+        if reason:
+            ack["reason"] = reason
+        self.client.publish(result_ack(device_id, result_id), json.dumps(ack), qos=1, retain=False)

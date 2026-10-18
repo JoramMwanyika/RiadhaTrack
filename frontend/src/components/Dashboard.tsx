@@ -6,6 +6,9 @@ import {
   RefreshCw,
   TrendingUp,
   AlertCircle,
+  BellRing,
+  Check,
+  X,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -14,11 +17,15 @@ import {
   getAthletes,
   getDevices,
   getResults,
+  getPendingResults,
+  acceptPendingResult,
+  rejectPendingResult,
   formatTime,
   qualityClass,
   qualityLabel,
 } from '../api/client';
 import type { AthleteSummary, Device, Result } from '../types';
+import type { PendingResult } from '../api/client';
 import { safeFormatDate, relativeTime, athleteDisplayName, cn } from '../lib/utils';
 import { Spinner } from './ui/Spinner';
 import { StatusDot } from './ui/StatusDot';
@@ -30,20 +37,24 @@ export function Dashboard() {
   const [athletes, setAthletes] = useState<AthleteSummary[]>([]);
   const [results, setResults] = useState<Result[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [pendingResults, setPendingResults] = useState<PendingResult[]>([]);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [a, r, d] = await Promise.all([
+      const [a, r, d, pending] = await Promise.all([
         getAthletes({ limit: 50 }),
         getResults({ limit: 12 }),
         getDevices(),
+        getPendingResults(),
       ]);
       setAthletes(a);
       setResults(r);
       setDevices(d);
+      setPendingResults(pending);
       setError(null);
       setLastRefresh(new Date());
     } catch (err: unknown) {
@@ -62,6 +73,20 @@ export function Dashboard() {
   const today = new Date().toISOString().slice(0, 10);
   const testsToday = results.filter((r) => r.recordedAt.startsWith(today)).length;
   const onlineDevices = devices.filter((d) => d.status === 'online').length;
+
+  async function reviewPending(result: PendingResult, decision: 'accept' | 'reject') {
+    setReviewingId(result.result_id);
+    try {
+      if (decision === 'accept') await acceptPendingResult(result.result_id);
+      else await rejectPendingResult(result.result_id);
+      setPendingResults((items) => items.filter((item) => item.result_id !== result.result_id));
+      await fetchAll();
+    } catch (err: unknown) {
+      setError(err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : 'Could not review the incoming result');
+    } finally {
+      setReviewingId(null);
+    }
+  }
 
   if (loading && !lastRefresh) {
     return (
@@ -98,6 +123,32 @@ export function Dashboard() {
           <AlertCircle className="h-4 w-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {pendingResults.length > 0 && (
+        <section className="rounded-xl border border-amber-400/40 bg-amber-400/10 shadow-[0_0_28px_rgba(251,191,36,.1)] overflow-hidden">
+          <div className="px-5 py-4 flex items-center gap-3 border-b border-amber-400/20">
+            <BellRing className="h-5 w-5 text-amber-300 shrink-0" />
+            <div>
+              <h2 className="font-semibold text-amber-100">Incoming test result{pendingResults.length === 1 ? '' : 's'} awaiting approval</h2>
+              <p className="text-xs text-amber-200/75 mt-0.5">Accept to save the result and confirm the upload to the timing device.</p>
+            </div>
+          </div>
+          <div className="divide-y divide-amber-400/15">
+            {pendingResults.map((result) => (
+              <div key={result.result_id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-white">Athlete {result.athlete_id} <span className="text-slate-400 font-normal">· {result.event} · {result.distance_m}m</span></div>
+                  <div className="text-sm text-amber-100/90 mt-1 font-mono">{formatTime(result.elapsed_ms)} <span className="font-sans text-slate-400">from {result.device_id}</span></div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button disabled={reviewingId === result.result_id} onClick={() => void reviewPending(result, 'reject')} className="btn-ghost text-slate-300 hover:text-red-300 disabled:opacity-50"><X className="h-4 w-4" /> Reject</button>
+                  <button disabled={reviewingId === result.result_id} onClick={() => void reviewPending(result, 'accept')} className="btn-primary disabled:opacity-50"><Check className="h-4 w-4" /> {reviewingId === result.result_id ? 'Saving…' : 'Accept & upload'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* KPI cards */}
@@ -277,6 +328,9 @@ export function Dashboard() {
             >
               <div className="font-medium text-slate-100">
                 {athleteDisplayName(a)}
+              </div>
+              <div className="text-xs font-mono text-brand-300 mt-1">
+                ID: {a.id}
               </div>
               <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
                 {a.school && <span>{a.school}</span>}

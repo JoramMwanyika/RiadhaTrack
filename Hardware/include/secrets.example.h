@@ -12,4 +12,6 @@
 #define RIADHA_DEVICE_ID "dev01"
 #define RIADHA_EVENT "sprint"
 #define RIADHA_DISTANCE_M 100
+#define RIADHA_BACKEND_HOST "192.168.1.10"
+#define RIADHA_BACKEND_PORT 8000
 // Direct 4x4 keypad: its rows and columns are configured in src/main.cpp.

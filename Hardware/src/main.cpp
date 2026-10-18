@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <ArduinoMqttClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -11,6 +12,14 @@
 #include "secrets.h"
 #else
 #include "secrets.example.h"
+#endif
+
+#ifndef RIADHA_BACKEND_HOST
+#define RIADHA_BACKEND_HOST RIADHA_MQTT_HOST
+#endif
+
+#ifndef RIADHA_BACKEND_PORT
+#define RIADHA_BACKEND_PORT 8000
 #endif
 
 // ESP32 DevKit wiring. Dxx means the pin labelled xx on the ESP32 board.
@@ -30,6 +39,7 @@ char keyMap[ROWS][COLS] = {
 
 constexpr unsigned long WELCOME_MS = 3000;
 constexpr unsigned long MAX_TEST_MS = 120000;
+constexpr unsigned long RUNNING_DISPLAY_MS = 100;
 constexpr unsigned long RETRY_MS = 10000;
 constexpr unsigned long RECONNECT_MS = 10000;
 constexpr uint32_t PENDING_MAGIC = 0x52544533;
@@ -44,6 +54,7 @@ MqttClient mqtt(wifiClient);
 
 enum Screen : byte { WELCOME, MENU, ENTER_ATHLETE, RUNNING, SHOW_RESULT, PENDING_SYNC, MESSAGE };
 Screen screen = WELCOME;
+enum AthleteLookup : byte { ATHLETE_FOUND, ATHLETE_NOT_FOUND, ATHLETE_LOOKUP_UNAVAILABLE };
 
 struct PendingResult {
   uint32_t magic;
@@ -51,6 +62,7 @@ struct PendingResult {
   uint32_t elapsedMs;
   char athleteId[17];
   char resultId[33];
+  uint8_t finishDetected;
   uint32_t checksum;
 };
 
@@ -64,6 +76,7 @@ unsigned long screenChangedAt = 0;
 unsigned long timerStartedUs = 0;
 unsigned long lastPublishAt = 0;
 unsigned long lastConnectAt = 0;
+unsigned long lastTimerDisplayAt = 0;
 unsigned long resultElapsedMs = 0;
 bool pendingLoaded = false;
 bool finishSensorWasClear = false;
@@ -113,13 +126,49 @@ void changeScreen(Screen next) {
   screenChangedAt = millis();
   if (next == MENU) showMenu();
   else if (next == ENTER_ATHLETE) show("Enter athlete ID", athleteId[0] ? athleteId : "# save  C clear");
-  else if (next == RUNNING) show("TIMING...", "IR is finish");
-  else if (next == PENDING_SYNC) show("Result pending", "Waiting for sync");
+  else if (next == RUNNING) show("Timing...", "Time 0:00.000");
+  else if (next == PENDING_SYNC) {
+    if (WiFi.status() != WL_CONNECTED) show("Result pending", "WiFi reconnecting");
+    else if (!mqtt.connected()) show("Result pending", "MQTT reconnecting");
+    else show("Result pending", "Waiting for ack");
+  }
   else if (next == SHOW_RESULT) {
     char result[17];
     snprintf(result, sizeof(result), "%lu.%03lus", resultElapsedMs / 1000, resultElapsedMs % 1000);
     show("Time recorded", result);
   }
+}
+
+void updateRunningDisplay(bool force = false) {
+  if (screen != RUNNING) return;
+  const unsigned long now = millis();
+  if (!force && now - lastTimerDisplayAt < RUNNING_DISPLAY_MS) return;
+  lastTimerDisplayAt = now;
+
+  const unsigned long elapsedMs = (micros() - timerStartedUs) / 1000UL;
+  char line[17];
+  snprintf(line, sizeof(line), "Time %lu:%02lu.%03lu", elapsedMs / 60000UL,
+           (elapsedMs / 1000UL) % 60UL, elapsedMs % 1000UL);
+  lcd.setCursor(0, 1);
+  lcd.print("                ");
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+}
+
+AthleteLookup lookupAthlete(const char *id) {
+  if (WiFi.status() != WL_CONNECTED) return ATHLETE_LOOKUP_UNAVAILABLE;
+  char url[192];
+  snprintf(url, sizeof(url), "http://%s:%u/api/device/athlete/%s", RIADHA_BACKEND_HOST,
+           RIADHA_BACKEND_PORT, id);
+  HTTPClient http;
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  if (!http.begin(url)) return ATHLETE_LOOKUP_UNAVAILABLE;
+  const int statusCode = http.GET();
+  http.end();
+  if (statusCode == HTTP_CODE_OK) return ATHLETE_FOUND;
+  if (statusCode == HTTP_CODE_NOT_FOUND) return ATHLETE_NOT_FOUND;
+  return ATHLETE_LOOKUP_UNAVAILABLE;
 }
 
 void publishPending() {
@@ -137,12 +186,18 @@ void publishPending() {
   JsonObject timing = document["timing"].to<JsonObject>();
   timing["elapsed_ms"] = pending.elapsedMs;
   timing["start_detected"] = true;
+  // A keypad press is an intentional manual finish, so it remains a valid
+  // completed timing result. The quality field records how it was finished.
   timing["finish_detected"] = true;
-  timing["quality"] = "manual_start_ir_finish";
+  timing["quality"] = pending.finishDetected ? "manual_start_ir_finish" : "manual_start_key_stop";
   document["sequence"] = pending.sequence;
-  mqtt.beginMessage(resultsTopic, false, 1);
-  serializeJson(document, mqtt);
-  mqtt.endMessage();
+  // A completed result is usually larger than ArduinoMqttClient's ESP32
+  // default 256-byte payload buffer. Supplying the exact length streams the
+  // whole JSON payload instead of silently truncating it into that buffer.
+  const size_t payloadSize = measureJson(document);
+  if (!mqtt.beginMessage(resultsTopic, payloadSize, false, 1)) return;
+  const size_t written = serializeJson(document, mqtt);
+  if (written != payloadSize || !mqtt.endMessage()) return;
   lastPublishAt = millis();
 }
 
@@ -183,12 +238,13 @@ void ensureMqtt() {
   if (mqtt.connected()) mqtt.poll();
 }
 
-void completeResult() {
+void completeResult(bool finishDetected) {
   resultElapsedMs = (micros() - timerStartedUs) / 1000UL;
   ++sequence;
   memset(&pending, 0, sizeof(pending));
   pending.sequence = sequence;
   pending.elapsedMs = resultElapsedMs;
+  pending.finishDetected = finishDetected ? 1 : 0;
   strncpy(pending.athleteId, athleteId, sizeof(pending.athleteId) - 1);
   snprintf(pending.resultId, sizeof(pending.resultId), "%s-b%u-%u", RIADHA_DEVICE_ID, bootCounter, sequence);
   savePending();
@@ -200,13 +256,14 @@ void pollFinishSensor() {
   if (screen != RUNNING) return;
   const bool sensorClear = digitalRead(IR_FINISH_D) == HIGH;
   if (sensorClear) finishSensorWasClear = true;
-  if (finishSensorWasClear && !sensorClear) completeResult();
+  if (finishSensorWasClear && !sensorClear) completeResult(true);
 }
 
 void startTimer() {
   timerStartedUs = micros();
   finishSensorWasClear = digitalRead(IR_FINISH_D) == HIGH;
   changeScreen(RUNNING);
+  updateRunningDisplay(true);
 }
 
 void handleKey(char key) {
@@ -228,15 +285,39 @@ void handleKey(char key) {
     } else if (key == 'C') {
       athleteId[0] = '\0';
       changeScreen(ENTER_ATHLETE);
-    } else if ((key == '#' || key == 'D') && length) changeScreen(MENU);
+    } else if ((key == '#' || key == 'D') && length) {
+      show("Checking athlete", "Please wait...");
+      const AthleteLookup lookup = lookupAthlete(athleteId);
+      if (lookup == ATHLETE_FOUND) {
+        changeScreen(MENU);
+      } else {
+        const bool notFound = lookup == ATHLETE_NOT_FOUND;
+        athleteId[0] = '\0';
+        show(notFound ? "Athlete not found" : "Backend offline",
+             notFound ? "Add in dashboard" : "Check WiFi/server");
+        screen = MESSAGE;
+        screenChangedAt = millis();
+      }
+    }
     else if (key == 'A' || key == '*') changeScreen(MENU);
     return;
   }
-  if (screen == RUNNING && (key == 'A' || key == 'C' || key == '*')) {
-    show("Test cancelled", "");
+  if (screen == RUNNING) {
+    completeResult(false);
+    return;
+  }
+  if (screen == PENDING_SYNC && key == 'C') {
+    // Explicit operator recovery: discard the unsynchronised result and reset
+    // the current athlete selection. Keep the boot counter intact so future
+    // result IDs remain unique.
+    clearPending();
+    athleteId[0] = '\0';
+    show("Pending cleared", "Start new test");
     screen = MESSAGE;
     screenChangedAt = millis();
-  } else if ((screen == SHOW_RESULT || screen == PENDING_SYNC || screen == MESSAGE) && (key == 'A' || key == 'C' || key == '*' || key == '#')) changeScreen(MENU);
+    return;
+  }
+  if ((screen == SHOW_RESULT || screen == PENDING_SYNC || screen == MESSAGE) && (key == 'A' || key == 'C' || key == '*' || key == '#')) changeScreen(MENU);
 }
 
 void setup() {
@@ -266,6 +347,7 @@ void setup() {
 void loop() {
   ensureMqtt();
   pollFinishSensor();
+  updateRunningDisplay();
   const unsigned long now = millis();
   if (screen == WELCOME && now - screenChangedAt >= WELCOME_MS) changeScreen(pendingLoaded ? PENDING_SYNC : MENU);
   if (screen == RUNNING && (micros() - timerStartedUs) / 1000UL > MAX_TEST_MS) {

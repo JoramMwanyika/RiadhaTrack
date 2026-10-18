@@ -55,7 +55,7 @@ The browser never connects to MQTT or SQLite. The backend is the only component 
 <summary><strong>End-to-end result lifecycle</strong></summary>
 
 1. The coach selects a registered athlete and starts a test on the ESP32.
-2. The IR finish sensor completes the run; the ESP32 calculates elapsed time and stores the result in local EEPROM.
+2. The LCD shows the live elapsed time; either the IR finish sensor or any keypad key completes the run, and the ESP32 stores the result in local EEPROM.
 3. The device publishes the result to Mosquitto using MQTT QoS 1.
 4. FastAPI validates the message, prevents duplicate inserts, and commits it to SQLite.
 5. FastAPI returns a `stored` acknowledgement to the device.
@@ -104,6 +104,24 @@ The detailed steps below use PowerShell and assume commands begin in this reposi
 
 Mosquitto transports messages between the timing hardware and backend. It does not store the official results; FastAPI stores them in SQLite after validating them.
 
+### Install and confirm Mosquitto in PowerShell
+
+Install Mosquitto for Windows, including its command-line tools, then open a **new PowerShell window** and confirm that the broker command is available:
+
+```powershell
+mosquitto -h
+mosquitto_passwd -h
+```
+
+If PowerShell reports that `mosquitto` is not recognized, either add Mosquitto's installation directory to your `PATH` and reopen PowerShell, or call the executable using its usual Windows installation path:
+
+```powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -h
+& "C:\Program Files\mosquitto\mosquitto_passwd.exe" -h
+```
+
+Use the same full executable path in the commands below if Mosquitto is not on your `PATH`.
+
 Create the broker data/config directories and copy the starter access-control list:
 
 ```powershell
@@ -121,14 +139,31 @@ mosquitto_passwd infra\mosquitto\config\passwordfile riadha-device-dev01
 
 Open `backend/infra/mosquitto/config/aclfile` and remove the `#` characters from the `dev01` device rules. For each additional device, create a new MQTT account and a matching ACL block with that device's unique ID.
 
-Start the broker from its configuration directory so the relative paths in `mosquitto.conf` work:
+### Run the broker in PowerShell
+
+Open a dedicated PowerShell terminal for Mosquitto. From the repository root, run the broker from its configuration directory so the relative paths in `mosquitto.conf` work:
 
 ```powershell
-cd infra\mosquitto
+cd RiadhaTrack\backend\infra\mosquitto
 mosquitto -c mosquitto.conf -v
 ```
 
-Leave this terminal running. The broker listens on TCP port `1883`. If the backend runs on a different computer, replace relative paths in `mosquitto.conf` with absolute paths and allow port 1883 through the server firewall only for the trusted local network.
+The `-v` option prints connection, subscription, publish, and access-denied messages in the terminal. Leave this PowerShell window open while using RiadhaTrack; close it or press `Ctrl+C` to stop the broker.
+
+If `mosquitto` is not in `PATH`, run the same command with the full executable path:
+
+```powershell
+cd RiadhaTrack\backend\infra\mosquitto
+& "C:\Program Files\mosquitto\mosquitto.exe" -c mosquitto.conf -v
+```
+
+The broker listens on TCP port `1883`. In a second PowerShell window, confirm it is listening:
+
+```powershell
+Get-NetTCPConnection -LocalPort 1883 -State Listen
+```
+
+If the backend runs on a different computer, replace relative paths in `mosquitto.conf` with absolute paths and allow port 1883 through the server firewall only for the trusted local network.
 
 ## 2. Configure the backend and database
 
@@ -238,9 +273,11 @@ Edit `Hardware/include/secrets.h` with the Wi-Fi details and the device MQTT acc
 #define RIADHA_DEVICE_ID "dev01"
 #define RIADHA_EVENT "sprint"
 #define RIADHA_DISTANCE_M 100
+#define RIADHA_BACKEND_HOST "192.168.1.10" // LAN IP of the FastAPI computer
+#define RIADHA_BACKEND_PORT 8000
 ```
 
-`RIADHA_DEVICE_ID` must match the device ID in both the MQTT username/ACL block and its topic paths. Give every physical unit a unique ID such as `dev02`.
+`RIADHA_MQTT_HOST` and `RIADHA_BACKEND_HOST` normally use the same server LAN IP because Mosquitto and FastAPI run on the same computer. `RIADHA_DEVICE_ID` must match the device ID in both the MQTT username/ACL block and its topic paths. Give every physical unit a unique ID such as `dev02`.
 
 Build and upload with the ESP32 connected by USB:
 
@@ -266,9 +303,9 @@ The ESP32 keeps one pending result in EEPROM and retries publication every 10 se
 ## 6. Run an end-to-end test
 
 1. In the dashboard, create an athlete—for example, `ATH001`.
-2. On the ESP32, press `A`, enter `ATH001`, and press `#` (or `D`) to confirm it.
+2. On the ESP32, press `A`, enter `ATH001`, and press `#` (or `D`) to confirm it. The device checks the ID with FastAPI before allowing the test; it displays `Athlete not found` if the record has not been registered.
 3. Press `B` to start the timer.
-4. Break the IR beam to finish the test.
+4. Watch the live elapsed time on the LCD, then break the IR beam or press any keypad key to finish the test.
 5. The LCD first shows the time, then `Saved dashboard` after the backend has stored it.
 6. Open the dashboard **Results** page or the athlete profile; the result appears on the next five-second refresh.
 
@@ -279,6 +316,8 @@ mosquitto_sub -h localhost -u riadha-device-dev01 -P YOUR_DEVICE_PASSWORD -t "ri
 ```
 
 If the LCD says `Unknown athlete`, add that ID in the dashboard and repeat the test. If it remains on `Result pending`, check that the ESP32, broker, and backend use the same LAN address, credentials, device ID, and topic prefix.
+
+To start fresh on the hardware, press **`C`** while the `Result pending` screen is visible. This deliberately discards the queued result and clears the selected athlete, without erasing network credentials or reusing old result IDs. Use it only when you no longer need to recover that pending result.
 
 ## Day-to-day operation
 
@@ -295,6 +334,10 @@ Copy-Item backend\data\riadha.db backend\backups\riadha-$(Get-Date -Format yyyyM
 ```
 
 Create the `backend/backups` directory first if it does not exist. Keep `backend/.env`, Mosquitto password files, and `Hardware/include/secrets.h` private; they contain credentials.
+
+### Deleting an athlete
+
+An administrator can open an athlete profile in the dashboard and select **Delete athlete**, then confirm the prompt. To protect timing history, athletes with recorded results cannot be deleted; the dashboard displays an explanation instead. Deleting an athlete without results is recorded in the audit log.
 
 ## Verification and troubleshooting
 

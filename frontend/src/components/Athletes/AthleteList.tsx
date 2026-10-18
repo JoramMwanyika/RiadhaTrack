@@ -99,6 +99,7 @@ export function AthleteList() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-800">
+                  <th className="table-header">Athlete ID</th>
                   <th className="table-header">Name</th>
                   <th className="table-header">School / Club</th>
                   <th className="table-header">Category</th>
@@ -111,7 +112,7 @@ export function AthleteList() {
                 {athletes.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="table-cell text-center text-slate-500 py-12"
                     >
                       {query
@@ -125,6 +126,9 @@ export function AthleteList() {
                       key={a.id}
                       className="border-b border-slate-800/50 hover:bg-slate-800/40"
                     >
+                      <td className="table-cell font-mono text-xs text-brand-300">
+                        {a.id}
+                      </td>
                       <td className="table-cell">
                         <Link
                           to={`/athletes/${a.id}`}

@@ -67,12 +67,20 @@ def initialize_database() -> None:
                 FOREIGN KEY(athlete_id) REFERENCES athletes(athlete_id),
                 FOREIGN KEY(device_id) REFERENCES devices(device_id)
             );
+            CREATE TABLE IF NOT EXISTS pending_results (
+                result_id TEXT PRIMARY KEY, athlete_id TEXT NOT NULL,
+                device_id TEXT NOT NULL, sport TEXT NOT NULL, event TEXT NOT NULL,
+                distance_m REAL NOT NULL CHECK(distance_m > 0), elapsed_ms INTEGER NOT NULL CHECK(elapsed_ms > 0),
+                quality TEXT NOT NULL, received_at TEXT NOT NULL, device_time_utc TEXT,
+                sequence INTEGER
+            );
             CREATE TABLE IF NOT EXISTS audit_log (
                 audit_id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, entity TEXT NOT NULL,
                 entity_id TEXT NOT NULL, old_value TEXT, new_value TEXT, reason TEXT, created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_results_athlete_received ON results(athlete_id, received_at DESC);
             CREATE INDEX IF NOT EXISTS idx_results_filters ON results(event, distance_m, received_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_pending_results_received ON pending_results(received_at DESC);
         """)
         existing = db.execute("SELECT 1 FROM users WHERE username = ?", (settings.admin_username,)).fetchone()
         if not existing:

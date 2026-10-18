@@ -13,7 +13,7 @@ from .database import connection, initialize_database
 from .mqtt import MqttIngestor
 from .schemas import AccountLogin, AccountRegistration, AthleteCreate, DeviceResult
 from .security import hash_password, new_session_token, token_digest, verify_password
-from .services import log_audit, store_device_result, utc_now
+from .services import approve_pending_result, log_audit, reject_pending_result, store_device_result, utc_now
 from .topics import device_commands, device_events, device_results, device_status
 
 security = HTTPBasic()
@@ -148,6 +148,22 @@ def create_athlete(athlete: AthleteCreate, user=Depends(current_user)):
     return values
 
 
+@app.delete("/api/athletes/{athlete_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_athlete(athlete_id: str, user=Depends(current_user)):
+    """Delete an athlete who has no stored results. Administrators only."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only administrators can delete athletes")
+    with connection() as db:
+        athlete = db.execute("SELECT * FROM athletes WHERE athlete_id = ?", (athlete_id,)).fetchone()
+        if not athlete:
+            raise HTTPException(status_code=404, detail="Athlete not found")
+        result_count = db.execute("SELECT COUNT(*) FROM results WHERE athlete_id = ?", (athlete_id,)).fetchone()[0]
+        if result_count:
+            raise HTTPException(status_code=409, detail="Cannot delete an athlete with recorded results")
+        db.execute("DELETE FROM athletes WHERE athlete_id = ?", (athlete_id,))
+    log_audit(user["user_id"], "delete", "athlete", athlete_id, old_value=dict(athlete))
+
+
 @app.get("/api/device/athlete/{athlete_id}")
 def device_get_athlete(athlete_id: str):
     """Fast device lookup endpoint for timing hardware on local Wi-Fi."""
@@ -171,6 +187,33 @@ def device_post_result(payload: DeviceResult):
     if status_str == "rejected":
         raise HTTPException(status_code=400, detail=reason or "Result rejected")
     return {"result_id": payload.result_id, "status": "stored", "athlete_id": payload.athlete_id}
+
+
+@app.get("/api/pending-results")
+def list_pending_results(user=Depends(current_user)):
+    with connection() as db:
+        rows = db.execute("SELECT * FROM pending_results ORDER BY received_at DESC").fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/pending-results/{result_id}/accept")
+def accept_pending_result(result_id: str, user=Depends(current_user)):
+    status_str, result = approve_pending_result(result_id)
+    if status_str == "missing" or not result:
+        raise HTTPException(404, "Pending result not found")
+    app.state.mqtt.publish_result_ack(result["device_id"], result["result_id"], "stored")
+    log_audit(user["user_id"], "accept", "pending_result", result_id, new_value=result)
+    return {"result_id": result_id, "status": "stored"}
+
+
+@app.post("/api/pending-results/{result_id}/reject")
+def reject_pending_result_endpoint(result_id: str, user=Depends(current_user)):
+    status_str, result = reject_pending_result(result_id)
+    if status_str == "missing" or not result:
+        raise HTTPException(404, "Pending result not found")
+    app.state.mqtt.publish_result_ack(result["device_id"], result["result_id"], "rejected", "coach_rejected")
+    log_audit(user["user_id"], "reject", "pending_result", result_id, old_value=result)
+    return {"result_id": result_id, "status": "rejected"}
 
 
 @app.get("/api/athletes/{athlete_id}")
