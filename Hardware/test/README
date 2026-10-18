@@ -1,11 +1,11 @@
+# Firmware tests
 
-This directory is intended for PlatformIO Test Runner and project tests.
+This directory is reserved for PlatformIO unit tests. No automated firmware tests are implemented yet.
 
-Unit Testing is a software testing method by which individual units of
-source code, sets of one or more MCU program modules together with associated
-control data, usage procedures, and operating procedures, are tested to
-determine whether they are fit for use. Unit testing finds problems early
-in the development cycle.
+Add test suites in subdirectories and run them from `Hardware` with:
 
-More information about PlatformIO Unit Testing:
-- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+```powershell
+pio test
+```
+
+The backend ingestion behaviour is covered separately; run `pytest tests -q` from `backend`.

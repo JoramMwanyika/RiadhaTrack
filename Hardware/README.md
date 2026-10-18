@@ -1,49 +1,84 @@
 # RiadhaTrack ESP32 timing unit
 
-This firmware targets a generic ESP32 DevKit with a 16×2 I²C LCD, direct 4×4 keypad, and one IR finish sensor. The keypad starts a test, the LCD shows the live time, and either the IR sensor or any keypad key finishes and saves it. Results are delivered via MQTT to the FastAPI backend, which stores them in SQLite.
+This firmware runs on a generic ESP32 DevKit. It accepts an athlete ID from a 4x4 keypad, checks that ID against the local API, times a run, and sends the completed result to the backend over MQTT.
 
-## Wiring
+The timer is a prototype. It supports repeatable training records but is not certified for official competition timing.
 
-`Dxx` refers to the pin numbered `xx` on the ESP32 board.
+## Hardware
 
 | Component | Connection | ESP32 pin |
-|---|---|---|
-| LCD | SDA | D21 |
-| LCD | SCL | D22 |
+| --- | --- | --- |
+| 16x2 I2C LCD | SDA / SCL | GPIO 21 / GPIO 22 |
 | LCD | VCC / GND | 3V3 / GND |
-| Keypad | R1, R2, R3, R4 | D13, D12, D14, D27 |
-| Keypad | C1, C2, C3, C4 | D26, D25, D33, D32 |
-| IR finish sensor | OUT | D19 |
+| 4x4 keypad rows | R1, R2, R3, R4 | GPIO 13, 12, 14, 27 |
+| 4x4 keypad columns | C1, C2, C3, C4 | GPIO 26, 25, 33, 32 |
+| IR finish sensor | OUT | GPIO 19 |
 | IR finish sensor | VCC / GND | 3V3 / GND |
 
-The keypad is a passive eight-wire matrix: do not connect VCC or GND to it. All component grounds must be common. Use 3.3V-compatible sensor output levels.
+The keypad is a passive eight-wire matrix: do not connect it to VCC or GND. All components must share ground. The sensor output must be safe for ESP32 3.3 V logic.
 
-## Keypad operation
+## Configure
 
-### Timing a test
+Copy the template, then replace every placeholder. `secrets.h` is ignored by Git and must remain private.
 
-Once a test starts, the LCD refreshes the elapsed time every 0.1 seconds. Either the IR finish sensor or **any keypad key** stops and saves the result. Results stopped with a key are sent with the `manual_start_key_stop` quality label; IR-finished results use `manual_start_ir_finish`.
+```powershell
+cd RiadhaTrack\Hardware
+Copy-Item include\secrets.example.h include\secrets.h
+```
 
-1. Startup: `RiadhaTrack` / `Welcome Athlete`.
-2. Press `A`, type a registered athlete ID, then press `#` or `D` to confirm it. The device checks the backend before continuing; an unregistered ID displays `Athlete not found`.
-3. Press `B` to manually start the timer.
-4. Watch the elapsed time update on the LCD.
-5. Trigger the IR sensor or press any keypad key to stop and save the timer.
-6. The device stores the result locally, sends it to MQTT, and the dashboard shows it under that athlete after the backend acknowledges it.
+Set the Wi-Fi credentials, the server LAN IP addresses, and the unique MQTT identity. With the supplied Mosquitto configuration, use port `1884` (not the template's default `1883`):
 
-`C` clears an athlete ID while entering it. During a running test, every key saves the elapsed result instead of cancelling it.
+```cpp
+#define RIADHA_MQTT_HOST "192.168.1.10"
+#define RIADHA_MQTT_PORT 1884
+#define RIADHA_MQTT_USERNAME "riadha-device-dev01"
+#define RIADHA_MQTT_PREFIX "riadha/v1"
+#define RIADHA_DEVICE_ID "dev01"
+#define RIADHA_BACKEND_HOST "192.168.1.10"
+#define RIADHA_BACKEND_PORT 8000
+```
 
-### Clear a stuck pending result
+`RIADHA_DEVICE_ID`, the MQTT username, and the device ACL block must describe the same device. Give each physical unit its own ID and MQTT account. See the [broker guide](../backend/infra/mosquitto/README.md).
 
-If the LCD shows `Result pending`, first check that Wi-Fi, Mosquitto, and the backend are running. To deliberately discard that unsynchronised result and restart the device workflow, press **`C`** while the `Result pending` screen is displayed. The unit clears the pending result and current athlete selection, then returns to the main menu. This does not erase Wi-Fi/MQTT settings or reset the device’s unique result-ID counter.
+## Build and upload
 
-## Configure and upload
-
-Copy `include/secrets.example.h` to `include/secrets.h`, fill in Wi‑Fi and MQTT details, then run:
+Install PlatformIO and connect the ESP32 by USB:
 
 ```powershell
 pio run
 pio run --target upload
 ```
 
-Use the broker and backend setup described in `../backend/README.md`.
+The dependencies are declared in `platformio.ini`. If upload cannot find the board, identify its serial port with `pio device list` and configure PlatformIO as needed.
+
+## Operator workflow
+
+1. At the menu, press `A` and enter a numeric athlete ID (up to 16 characters).
+2. Press `#` or `D` to verify the athlete with the backend. Press `C` while entering an ID to clear it.
+3. Press `B` to start the timer.
+4. Break the IR beam to finish. Any keypad key also finishes the active test as a manual stop.
+5. Wait for `Saved dashboard`. The result has then been stored in SQLite.
+
+The live display updates every 0.1 seconds. A run has a two-minute maximum duration; on timeout the unit returns to the menu without saving a result.
+
+## Offline recovery
+
+Before publishing, the firmware stores one completed result in EEPROM. It retries MQTT delivery every 10 seconds until it receives the matching `stored` acknowledgement. Do not begin a new test while `Result pending` is displayed.
+
+After checking Wi-Fi, Mosquitto, and the backend, an operator may press `C` on the `Result pending` screen to deliberately discard that one unsynchronised result and clear the selected athlete. This does not erase the device configuration or reset the result-ID counter.
+
+## MQTT contract
+
+The unit publishes QoS 1 results to:
+
+```text
+riadha/v1/devices/dev01/results
+```
+
+It listens for QoS 1 acknowledgements at:
+
+```text
+riadha/v1/devices/dev01/acks/+
+```
+
+The backend accepts a result only after validating its payload and athlete ID. Manual keypad finishes use the `manual_start_key_stop` quality label; IR finishes use `manual_start_ir_finish`.
