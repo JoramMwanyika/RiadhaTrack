@@ -1,8 +1,6 @@
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#include <WiFi.h>
 #include <ArduinoMqttClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -15,561 +13,268 @@
 #include "secrets.example.h"
 #endif
 
-// Fallbacks if not defined in secrets.h
-#ifndef RIADHA_BACKEND_HOST
-#define RIADHA_BACKEND_HOST RIADHA_MQTT_HOST
-#endif
-
-#ifndef RIADHA_BACKEND_PORT
-#define RIADHA_BACKEND_PORT 8000
-#endif
-
-#ifndef RIADHA_LCD_ADDRESS
-#define RIADHA_LCD_ADDRESS 0x27
-#endif
-
-// Pin Definitions according to hardware specification
-constexpr byte SDA_PIN = 4;        // IO4 (GPIO4)
-constexpr byte SCL_PIN = 5;        // IO5 (GPIO5)
-constexpr byte IR_PIN  = 16;       // IO16 (GPIO16) - IR Sensor OUT/DO
-
-// 4x4 Keypad Pin Mapping
-// Rows: R1 -> IO14, R2 -> IO12, R3 -> IO13, R4 -> IO15
-// Cols: C1 -> IO0,  C2 -> IO2,  C3 -> RXD0 (GPIO3), C4 -> TXD0 (GPIO1)
-const byte ROWS = 4;
-const byte COLS = 4;
-char keys[ROWS][COLS] = {
+// ESP32 DevKit wiring. Dxx means the pin labelled xx on the ESP32 board.
+constexpr byte LCD_SDA_D = 21;
+constexpr byte LCD_SCL_D = 22;
+constexpr byte IR_FINISH_D = 19;
+constexpr byte ROWS = 4;
+constexpr byte COLS = 4;
+byte rowPins[ROWS] = {13, 12, 14, 27};
+byte colPins[COLS] = {26, 25, 33, 32};
+char keyMap[ROWS][COLS] = {
   {'1', '2', '3', 'A'},
   {'4', '5', '6', 'B'},
   {'7', '8', '9', 'C'},
-  {'*', '0', '#', 'D'}
+  {'*', '0', '#', 'D'},
 };
-byte rowPins[ROWS] = {14, 12, 13, 15};
-byte colPins[COLS] = {0, 2, 3, 1};
 
-Keypad customKeypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-// Configured for 16x2 LCD
-LiquidCrystal_I2C lcd(RIADHA_LCD_ADDRESS, 16, 2);
+constexpr unsigned long WELCOME_MS = 3000;
+constexpr unsigned long MAX_TEST_MS = 120000;
+constexpr unsigned long RETRY_MS = 10000;
+constexpr unsigned long RECONNECT_MS = 10000;
+constexpr uint32_t PENDING_MAGIC = 0x52544533;
+constexpr int EEPROM_BYTES = 512;
+constexpr int BOOT_COUNTER_ADDRESS = 0;
+constexpr int PENDING_ADDRESS = 16;
 
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Keypad keypad = Keypad(makeKeymap(keyMap), rowPins, colPins, ROWS, COLS);
 WiFiClient wifiClient;
 MqttClient mqtt(wifiClient);
 
-// Timing and State Constants
-constexpr unsigned long WELCOME_MS = 4000;      // 4 seconds welcome screen
-constexpr unsigned long MAX_TEST_MS = 120000;   // 2 minutes test timeout
-constexpr unsigned long RETRY_SYNC_MS = 10000;  // Retry pending results every 10s
-constexpr unsigned long IR_ARM_LOCKOUT_MS = 150;// Prevent instant false trigger on start
-constexpr uint32_t PENDING_MAGIC = 0x52544432;
-constexpr int EEPROM_BYTES = 512;
-constexpr int BOOT_COUNTER_ADDR = 0;
-constexpr int PENDING_ADDR = 16;
-
-enum Screen : byte {
-  WELCOME,
-  MENU,
-  ENTER_ATHLETE_ID,
-  ATHLETE_CONFIRMED,
-  NO_ATHLETE_WARNING,
-  RUNNING,
-  SHOW_RESULT
-};
-
+enum Screen : byte { WELCOME, MENU, ENTER_ATHLETE, RUNNING, SHOW_RESULT, PENDING_SYNC, MESSAGE };
 Screen screen = WELCOME;
 
 struct PendingResult {
   uint32_t magic;
   uint32_t sequence;
   uint32_t elapsedMs;
-  char athleteId[32];
-  char athleteName[32];
-  char resultId[48];
+  char athleteId[17];
+  char resultId[33];
   uint32_t checksum;
 };
 
 PendingResult pending{};
-bool pendingLoaded = false;
+char athleteId[17] = "";
+char resultsTopic[96];
+char ackTopic[128];
 uint32_t bootCounter = 0;
 uint32_t sequence = 0;
-
-// Currently selected athlete state
-char inputAthleteId[32] = "";
-char selectedAthleteId[32] = "";
-char selectedAthleteName[32] = "";
-
-// Timing variables
 unsigned long screenChangedAt = 0;
-unsigned long runStartUs = 0;
-unsigned long runStartMs = 0;
+unsigned long timerStartedUs = 0;
+unsigned long lastPublishAt = 0;
+unsigned long lastConnectAt = 0;
 unsigned long resultElapsedMs = 0;
-unsigned long lastRunningLcdUpdate = 0;
-unsigned long lastSyncAttempt = 0;
-int irIdleState = HIGH;
+bool pendingLoaded = false;
+bool finishSensorWasClear = false;
 
-char resultsTopic[128];
-char ackTopic[128];
-
-uint32_t calcChecksum(const PendingResult &val) {
-  const byte *p = reinterpret_cast<const byte *>(&val);
-  uint32_t sum = 0;
-  for (size_t i = 0; i < sizeof(PendingResult) - sizeof(val.checksum); ++i) {
-    sum += p[i];
-  }
-  return sum;
+uint32_t recordChecksum(const PendingResult &value) {
+  const byte *data = reinterpret_cast<const byte *>(&value);
+  uint32_t total = 0;
+  for (size_t i = 0; i < sizeof(PendingResult) - sizeof(value.checksum); ++i) total += data[i];
+  return total;
 }
 
-void savePendingResult() {
+void savePending() {
   pending.magic = PENDING_MAGIC;
-  pending.checksum = calcChecksum(pending);
-  EEPROM.put(PENDING_ADDR, pending);
+  pending.checksum = recordChecksum(pending);
+  EEPROM.put(PENDING_ADDRESS, pending);
   EEPROM.commit();
   pendingLoaded = true;
 }
 
-void clearPendingResult() {
+void clearPending() {
   pending.magic = 0;
-  pending.checksum = 0;
-  EEPROM.put(PENDING_ADDR, pending);
+  pending.checksum = recordChecksum(pending);
+  EEPROM.put(PENDING_ADDRESS, pending);
   EEPROM.commit();
   pendingLoaded = false;
 }
 
-// 16x2 Display helpers: exactly 16 characters per line
-void updateLine(byte row, const char *text) {
-  char buf[17];
-  snprintf(buf, sizeof(buf), "%-16.16s", text ? text : "");
-  lcd.setCursor(0, row);
-  lcd.print(buf);
-}
-
-void showScreenLines(const char *l1, const char *l2 = "") {
+void show(const char *top, const char *bottom = "") {
+  char topLine[17];
+  char bottomLine[17];
+  snprintf(topLine, sizeof(topLine), "%-16.16s", top);
+  snprintf(bottomLine, sizeof(bottomLine), "%-16.16s", bottom);
   lcd.clear();
-  updateLine(0, l1);
-  updateLine(1, l2);
+  lcd.setCursor(0, 0);
+  lcd.print(topLine);
+  lcd.setCursor(0, 1);
+  lcd.print(bottomLine);
 }
 
-// Check and maintain Wi-Fi connection
-void checkWifi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    static unsigned long lastWifiAttempt = 0;
-    if (millis() - lastWifiAttempt > 10000) {
-      lastWifiAttempt = millis();
-      WiFi.begin(RIADHA_WIFI_SSID, RIADHA_WIFI_PASSWORD);
-    }
+void showMenu() {
+  if (athleteId[0]) show(athleteId, "B Start Timer");
+  else show("A Select Athlete", "B Start Timer");
+}
+
+void changeScreen(Screen next) {
+  screen = next;
+  screenChangedAt = millis();
+  if (next == MENU) showMenu();
+  else if (next == ENTER_ATHLETE) show("Enter athlete ID", athleteId[0] ? athleteId : "# save  C clear");
+  else if (next == RUNNING) show("TIMING...", "IR is finish");
+  else if (next == PENDING_SYNC) show("Result pending", "Waiting for sync");
+  else if (next == SHOW_RESULT) {
+    char result[17];
+    snprintf(result, sizeof(result), "%lu.%03lus", resultElapsedMs / 1000, resultElapsedMs % 1000);
+    show("Time recorded", result);
   }
 }
 
-// Look up athlete in database via Backend REST API
-bool lookupAthleteInDatabase(const char *id, char *outFirstName, size_t maxLen) {
-  checkWifi();
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-
-  WiFiClient client;
-  HTTPClient http;
-  String url = String("http://") + RIADHA_BACKEND_HOST + ":" + RIADHA_BACKEND_PORT + "/api/device/athlete/" + id;
-
-  http.begin(client, url);
-  http.setTimeout(4000);
-  int httpCode = http.GET();
-
-  bool found = false;
-  if (httpCode == 200) {
-    String payload = http.getString();
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    if (!error) {
-      const char *fn = doc["first_name"] | "";
-      if (fn && strlen(fn) > 0) {
-        strncpy(outFirstName, fn, maxLen - 1);
-        outFirstName[maxLen - 1] = '\0';
-      } else {
-        const char *dn = doc["display_name"] | id;
-        strncpy(outFirstName, dn, maxLen - 1);
-        outFirstName[maxLen - 1] = '\0';
-      }
-      found = true;
-    }
-  }
-  http.end();
-  return found;
-}
-
-// Send timing result to backend (HTTP first with MQTT fallback/mirror)
-bool sendResultToBackend(const PendingResult &res) {
-  checkWifi();
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-
-  // 1. HTTP POST direct to backend database
-  bool httpSuccess = false;
-  {
-    WiFiClient client;
-    HTTPClient http;
-    String url = String("http://") + RIADHA_BACKEND_HOST + ":" + RIADHA_BACKEND_PORT + "/api/device/results";
-    http.begin(client, url);
-    http.addHeader("Content-Type", "application/json");
-    http.setTimeout(3500);
-
-    StaticJsonDocument<384> doc;
-    doc["schema_version"] = 1;
-    doc["event_type"] = "timing.result.completed";
-    doc["result_id"] = res.resultId;
-    doc["device_id"] = RIADHA_DEVICE_ID;
-    doc["athlete_id"] = res.athleteId;
-
-    JsonObject test = doc.createNestedObject("test");
-    test["sport"] = "athletics";
-    test["event"] = RIADHA_EVENT;
-    test["distance_m"] = RIADHA_DISTANCE_M;
-
-    JsonObject timing = doc.createNestedObject("timing");
-    timing["elapsed_ms"] = res.elapsedMs;
-    timing["start_detected"] = true;
-    timing["finish_detected"] = true;
-    timing["quality"] = "official_optical_sensor";
-
-    doc["sequence"] = res.sequence;
-
-    String jsonStr;
-    serializeJson(doc, jsonStr);
-
-    int httpCode = http.POST(jsonStr);
-    if (httpCode == 200 || httpCode == 201) {
-      httpSuccess = true;
-    }
-    http.end();
-  }
-
-  // 2. Also publish over MQTT if broker is reachable
-  if (mqtt.connected()) {
-    StaticJsonDocument<384> doc;
-    doc["schema_version"] = 1;
-    doc["event_type"] = "timing.result.completed";
-    doc["result_id"] = res.resultId;
-    doc["device_id"] = RIADHA_DEVICE_ID;
-    doc["athlete_id"] = res.athleteId;
-
-    JsonObject test = doc.createNestedObject("test");
-    test["sport"] = "athletics";
-    test["event"] = RIADHA_EVENT;
-    test["distance_m"] = RIADHA_DISTANCE_M;
-
-    JsonObject timing = doc.createNestedObject("timing");
-    timing["elapsed_ms"] = res.elapsedMs;
-    timing["start_detected"] = true;
-    timing["finish_detected"] = true;
-    timing["quality"] = "official_optical_sensor";
-
-    doc["sequence"] = res.sequence;
-
-    mqtt.beginMessage(resultsTopic, false, 1);
-    serializeJson(doc, mqtt);
-    mqtt.endMessage();
-  }
-
-  return httpSuccess;
+void publishPending() {
+  if (!pendingLoaded || !mqtt.connected()) return;
+  JsonDocument document;
+  document["schema_version"] = 1;
+  document["event_type"] = "timing.result.completed";
+  document["result_id"] = pending.resultId;
+  document["device_id"] = RIADHA_DEVICE_ID;
+  document["athlete_id"] = pending.athleteId;
+  JsonObject test = document["test"].to<JsonObject>();
+  test["sport"] = "athletics";
+  test["event"] = RIADHA_EVENT;
+  test["distance_m"] = RIADHA_DISTANCE_M;
+  JsonObject timing = document["timing"].to<JsonObject>();
+  timing["elapsed_ms"] = pending.elapsedMs;
+  timing["start_detected"] = true;
+  timing["finish_detected"] = true;
+  timing["quality"] = "manual_start_ir_finish";
+  document["sequence"] = pending.sequence;
+  mqtt.beginMessage(resultsTopic, false, 1);
+  serializeJson(document, mqtt);
+  mqtt.endMessage();
+  lastPublishAt = millis();
 }
 
 void onMqttMessage(int) {
-  StaticJsonDocument<192> document;
+  JsonDocument document;
   if (deserializeJson(document, mqtt)) return;
-  const char *resultId = document["result_id"] | "";
+  const char *receivedId = document["result_id"] | "";
   const char *status = document["status"] | "";
-  if (pendingLoaded && strcmp(resultId, pending.resultId) == 0 && strcmp(status, "stored") == 0) {
-    clearPendingResult();
+  const char *reason = document["reason"] | "";
+  if (!pendingLoaded || strcmp(receivedId, pending.resultId) != 0) return;
+  if (strcmp(status, "stored") == 0) {
+    clearPending();
+    show("Saved dashboard", pending.athleteId);
+    screen = MESSAGE;
+    screenChangedAt = millis();
+  } else if (strcmp(status, "rejected") == 0) {
+    clearPending();
+    show(strcmp(reason, "unknown_athlete") == 0 ? "Unknown athlete" : "Result rejected", strcmp(reason, "unknown_athlete") == 0 ? "Register ID first" : "Check backend");
+    screen = MESSAGE;
+    screenChangedAt = millis();
   }
 }
 
-void maintainMqtt() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqtt.connected()) {
-      static unsigned long lastMqttAttempt = 0;
-      if (millis() - lastMqttAttempt > 15000) {
-        lastMqttAttempt = millis();
-        mqtt.setId(RIADHA_DEVICE_ID);
-        if (strlen(RIADHA_MQTT_USERNAME) > 0) {
-          mqtt.setUsernamePassword(RIADHA_MQTT_USERNAME, RIADHA_MQTT_PASSWORD);
-        }
-        if (mqtt.connect(RIADHA_MQTT_HOST, RIADHA_MQTT_PORT)) {
-          mqtt.subscribe(ackTopic, 1);
-        }
-      }
-    } else {
-      mqtt.poll();
+void ensureMqtt() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - lastConnectAt >= RECONNECT_MS) {
+      lastConnectAt = millis();
+      WiFi.begin(RIADHA_WIFI_SSID, RIADHA_WIFI_PASSWORD);
     }
+    return;
   }
+  if (!mqtt.connected() && millis() - lastConnectAt >= RECONNECT_MS) {
+    lastConnectAt = millis();
+    mqtt.setId(RIADHA_DEVICE_ID);
+    mqtt.setUsernamePassword(RIADHA_MQTT_USERNAME, RIADHA_MQTT_PASSWORD);
+    if (mqtt.connect(RIADHA_MQTT_HOST, RIADHA_MQTT_PORT)) mqtt.subscribe(ackTopic, 1);
+  }
+  if (mqtt.connected()) mqtt.poll();
 }
 
-void setScreen(Screen next) {
-  screen = next;
-  screenChangedAt = millis();
+void completeResult() {
+  resultElapsedMs = (micros() - timerStartedUs) / 1000UL;
+  ++sequence;
+  memset(&pending, 0, sizeof(pending));
+  pending.sequence = sequence;
+  pending.elapsedMs = resultElapsedMs;
+  strncpy(pending.athleteId, athleteId, sizeof(pending.athleteId) - 1);
+  snprintf(pending.resultId, sizeof(pending.resultId), "%s-b%u-%u", RIADHA_DEVICE_ID, bootCounter, sequence);
+  savePending();
+  changeScreen(SHOW_RESULT);
+  publishPending();
+}
 
-  switch (screen) {
-    case WELCOME:
-      // Exact 16x2 Welcome screen for 4 seconds
-      showScreenLines("   RiadhaTrac   ", "Welcome athlete!");
-      break;
+void pollFinishSensor() {
+  if (screen != RUNNING) return;
+  const bool sensorClear = digitalRead(IR_FINISH_D) == HIGH;
+  if (sensorClear) finishSensorWasClear = true;
+  if (finishSensorWasClear && !sensorClear) completeResult();
+}
 
-    case MENU: {
-      char athleteLine[17];
-      if (selectedAthleteId[0] != '\0') {
-        snprintf(athleteLine, sizeof(athleteLine), "Ath: %-11.11s", selectedAthleteName[0] ? selectedAthleteName : selectedAthleteId);
-      } else {
-        snprintf(athleteLine, sizeof(athleteLine), "No athlete sel.");
-      }
-      showScreenLines("1:Select 2:Start", athleteLine);
-      break;
+void startTimer() {
+  timerStartedUs = micros();
+  finishSensorWasClear = digitalRead(IR_FINISH_D) == HIGH;
+  changeScreen(RUNNING);
+}
+
+void handleKey(char key) {
+  if (screen == MENU) {
+    if (key == 'A') changeScreen(ENTER_ATHLETE);
+    else if (key == 'B') {
+      if (pendingLoaded) changeScreen(PENDING_SYNC);
+      else if (athleteId[0]) startTimer();
+      else { show("Select athlete", "Press A first"); screen = MESSAGE; screenChangedAt = millis(); }
     }
-
-    case ENTER_ATHLETE_ID: {
-      char l0[17];
-      snprintf(l0, sizeof(l0), "Enter ID: %-6.6s", inputAthleteId);
-      showScreenLines(l0, "#=OK      *=Back");
-      break;
-    }
-
-    case ATHLETE_CONFIRMED: {
-      char l0[17];
-      snprintf(l0, sizeof(l0), "Ath: %-11.11s", selectedAthleteName);
-      showScreenLines(l0, "2:Start   *:Menu");
-      break;
-    }
-
-    case NO_ATHLETE_WARNING:
-      showScreenLines("No Athlete Sel!", "1:Select  *:Menu");
-      break;
-
-    case RUNNING: {
-      char l0[17];
-      snprintf(l0, sizeof(l0), "Run: %-11.11s", selectedAthleteName[0] ? selectedAthleteName : selectedAthleteId);
-      showScreenLines(l0, "Time: 0.000 s   ");
-      break;
-    }
-
-    case SHOW_RESULT: {
-      char timeLine[17];
-      snprintf(timeLine, sizeof(timeLine), "Time: %lu.%03lu s", resultElapsedMs / 1000UL, resultElapsedMs % 1000UL);
-      showScreenLines(timeLine, "Saving to DB...");
-      break;
-    }
+    return;
   }
+  if (screen == ENTER_ATHLETE) {
+    const size_t length = strlen(athleteId);
+    if (key >= '0' && key <= '9' && length < sizeof(athleteId) - 1) {
+      athleteId[length] = key;
+      athleteId[length + 1] = '\0';
+      changeScreen(ENTER_ATHLETE);
+    } else if (key == 'C') {
+      athleteId[0] = '\0';
+      changeScreen(ENTER_ATHLETE);
+    } else if ((key == '#' || key == 'D') && length) changeScreen(MENU);
+    else if (key == 'A' || key == '*') changeScreen(MENU);
+    return;
+  }
+  if (screen == RUNNING && (key == 'A' || key == 'C' || key == '*')) {
+    show("Test cancelled", "");
+    screen = MESSAGE;
+    screenChangedAt = millis();
+  } else if ((screen == SHOW_RESULT || screen == PENDING_SYNC || screen == MESSAGE) && (key == 'A' || key == 'C' || key == '*' || key == '#')) changeScreen(MENU);
 }
 
 void setup() {
-  // Free UART0 pins GPIO1 (TX) and GPIO3 (RX) for Keypad columns
-  // Do NOT use Serial so GPIO1 and GPIO3 operate as matrix keypad inputs
-  pinMode(1, INPUT_PULLUP);
-  pinMode(3, INPUT_PULLUP);
-
-  // Initialize I2C and 16x2 LCD
-  Wire.begin(SDA_PIN, SCL_PIN);
-  lcd.init();
-  lcd.backlight();
-
-  // Initialize IR sensor pin
-  pinMode(IR_PIN, INPUT_PULLUP);
-  delay(10);
-  irIdleState = digitalRead(IR_PIN);
-
-  // Initialize EEPROM for persistent result queue
   EEPROM.begin(EEPROM_BYTES);
-  EEPROM.get(BOOT_COUNTER_ADDR, bootCounter);
+  EEPROM.get(BOOT_COUNTER_ADDRESS, bootCounter);
   ++bootCounter;
-  EEPROM.put(BOOT_COUNTER_ADDR, bootCounter);
+  EEPROM.put(BOOT_COUNTER_ADDRESS, bootCounter);
   EEPROM.commit();
-
-  EEPROM.get(PENDING_ADDR, pending);
-  pendingLoaded = (pending.magic == PENDING_MAGIC && pending.checksum == calcChecksum(pending));
+  EEPROM.get(PENDING_ADDRESS, pending);
+  pendingLoaded = pending.magic == PENDING_MAGIC && pending.checksum == recordChecksum(pending);
   sequence = pendingLoaded ? pending.sequence : 0;
-
-  // Set MQTT topics
   snprintf(resultsTopic, sizeof(resultsTopic), "%s/devices/%s/results", RIADHA_MQTT_PREFIX, RIADHA_DEVICE_ID);
   snprintf(ackTopic, sizeof(ackTopic), "%s/devices/%s/acks/+", RIADHA_MQTT_PREFIX, RIADHA_DEVICE_ID);
+  Wire.begin(LCD_SDA_D, LCD_SCL_D);
+  Wire.setClock(100000);
+  lcd.init();
+  lcd.backlight();
+  pinMode(IR_FINISH_D, INPUT_PULLUP);
   mqtt.onMessage(onMqttMessage);
-
-  // Connect Wi-Fi
   WiFi.mode(WIFI_STA);
   WiFi.begin(RIADHA_WIFI_SSID, RIADHA_WIFI_PASSWORD);
-
-  // 1. Initial boot: Welcome athlete for 4 seconds
-  setScreen(WELCOME);
+  lastConnectAt = millis();
+  show("RiadhaTrack", "Welcome Athlete");
+  screenChangedAt = millis();
 }
 
 void loop() {
-  checkWifi();
-  maintainMqtt();
-
-  unsigned long now = millis();
-
-  // Screen transition: Welcome screen for exactly 4 seconds
-  if (screen == WELCOME && (now - screenChangedAt >= WELCOME_MS)) {
-    setScreen(MENU);
+  ensureMqtt();
+  pollFinishSensor();
+  const unsigned long now = millis();
+  if (screen == WELCOME && now - screenChangedAt >= WELCOME_MS) changeScreen(pendingLoaded ? PENDING_SYNC : MENU);
+  if (screen == RUNNING && (micros() - timerStartedUs) / 1000UL > MAX_TEST_MS) {
+    show("Test timed out", "Press A for menu");
+    screen = MESSAGE;
+    screenChangedAt = now;
   }
-
-  // Periodic retry of any pending unsynced results
-  if (pendingLoaded && (now - lastSyncAttempt >= RETRY_SYNC_MS)) {
-    lastSyncAttempt = now;
-    if (sendResultToBackend(pending)) {
-      clearPendingResult();
-      if (screen == MENU) setScreen(MENU);
-    }
-  }
-
-  // Handle RUNNING timing state
-  if (screen == RUNNING) {
-    unsigned long currentElapsedMs = (now - runStartMs);
-
-    // Update running time on row 1 of the 16x2 LCD every 75ms
-    if (now - lastRunningLcdUpdate > 75) {
-      lastRunningLcdUpdate = now;
-      char runTimeLine[20];
-      snprintf(runTimeLine, sizeof(runTimeLine), "Time: %lu.%03lu s", currentElapsedMs / 1000UL, currentElapsedMs % 1000UL);
-      updateLine(1, runTimeLine);
-    }
-
-    // Check IR sensor trigger (after arming lockout)
-    int currentIr = digitalRead(IR_PIN);
-    if ((now - runStartMs > IR_ARM_LOCKOUT_MS) && (currentIr != irIdleState)) {
-      unsigned long finishUs = micros();
-      resultElapsedMs = (finishUs - runStartUs) / 1000UL;
-
-      // Create persistent pending record
-      ++sequence;
-      memset(&pending, 0, sizeof(pending));
-      pending.sequence = sequence;
-      pending.elapsedMs = resultElapsedMs;
-      strncpy(pending.athleteId, selectedAthleteId, sizeof(pending.athleteId) - 1);
-      strncpy(pending.athleteName, selectedAthleteName, sizeof(pending.athleteName) - 1);
-      snprintf(pending.resultId, sizeof(pending.resultId), "%s-b%u-%u", RIADHA_DEVICE_ID, bootCounter, sequence);
-      savePendingResult();
-
-      setScreen(SHOW_RESULT);
-
-      // Save to database
-      if (sendResultToBackend(pending)) {
-        clearPendingResult();
-        updateLine(1, "Saved! 2=Run #=M");
-      } else {
-        updateLine(1, "Queued!2=Run #=M");
-      }
-      return;
-    }
-
-    // Timeout check
-    if (currentElapsedMs > MAX_TEST_MS) {
-      showScreenLines("Test Timed Out! ", "* Return to Menu");
-      delay(2500);
-      setScreen(MENU);
-      return;
-    }
-  }
-
-  // Read Keypad input
-  char key = customKeypad.getKey();
-  if (!key) return;
-
-  // Keypad actions per screen
-  switch (screen) {
-    case WELCOME:
-      // Can skip welcome by pressing any key
-      setScreen(MENU);
-      break;
-
-    case MENU:
-      if (key == '1') {
-        inputAthleteId[0] = '\0';
-        setScreen(ENTER_ATHLETE_ID);
-      } else if (key == '2') {
-        if (selectedAthleteId[0] == '\0') {
-          setScreen(NO_ATHLETE_WARNING);
-        } else {
-          // Start timer immediately!
-          irIdleState = digitalRead(IR_PIN);
-          runStartUs = micros();
-          runStartMs = millis();
-          setScreen(RUNNING);
-        }
-      }
-      break;
-
-    case ENTER_ATHLETE_ID: {
-      size_t len = strlen(inputAthleteId);
-      if (key >= '0' && key <= '9') {
-        if (len < sizeof(inputAthleteId) - 1 && len < 6) {
-          inputAthleteId[len] = key;
-          inputAthleteId[len + 1] = '\0';
-          char l0[17];
-          snprintf(l0, sizeof(l0), "Enter ID: %-6.6s", inputAthleteId);
-          updateLine(0, l0);
-        }
-      } else if (key == '*') {
-        if (len > 0) {
-          inputAthleteId[len - 1] = '\0';
-          char l0[17];
-          snprintf(l0, sizeof(l0), "Enter ID: %-6.6s", inputAthleteId);
-          updateLine(0, l0);
-        } else {
-          setScreen(MENU);
-        }
-      } else if (key == '#' && len > 0) {
-        // Query database for athlete ID
-        showScreenLines("Searching DB... ", inputAthleteId);
-        char firstName[32] = "";
-        bool found = lookupAthleteInDatabase(inputAthleteId, firstName, sizeof(firstName));
-
-        if (found) {
-          strncpy(selectedAthleteId, inputAthleteId, sizeof(selectedAthleteId) - 1);
-          strncpy(selectedAthleteName, firstName, sizeof(selectedAthleteName) - 1);
-          setScreen(ATHLETE_CONFIRMED);
-        } else {
-          showScreenLines("Athlete Not inDB", "*=Back to Menu  ");
-        }
-      }
-      break;
-    }
-
-    case ATHLETE_CONFIRMED:
-      if (key == '2') {
-        // Start Timer for confirmed athlete
-        irIdleState = digitalRead(IR_PIN);
-        runStartUs = micros();
-        runStartMs = millis();
-        setScreen(RUNNING);
-      } else if (key == '*' || key == '#') {
-        setScreen(MENU);
-      }
-      break;
-
-    case NO_ATHLETE_WARNING:
-      if (key == '1') {
-        inputAthleteId[0] = '\0';
-        setScreen(ENTER_ATHLETE_ID);
-      } else if (key == '*') {
-        setScreen(MENU);
-      }
-      break;
-
-    case RUNNING:
-      // Allow aborting run
-      if (key == '*') {
-        showScreenLines("Test Aborted!   ", "Returning...    ");
-        delay(1000);
-        setScreen(MENU);
-      }
-      break;
-
-    case SHOW_RESULT:
-      if (key == '#' || key == '*') {
-        setScreen(MENU);
-      } else if (key == '2') {
-        // Run again with the same athlete
-        irIdleState = digitalRead(IR_PIN);
-        runStartUs = micros();
-        runStartMs = millis();
-        setScreen(RUNNING);
-      }
-      break;
-  }
+  if (pendingLoaded && now - lastPublishAt >= RETRY_MS) publishPending();
+  if ((screen == SHOW_RESULT || screen == MESSAGE) && now - screenChangedAt >= 4000) changeScreen(pendingLoaded ? PENDING_SYNC : MENU);
+  const char key = keypad.getKey();
+  if (key) handleKey(key);
 }

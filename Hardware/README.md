@@ -1,81 +1,40 @@
-# RiadhaTrac timing hardware (ESP8266)
+# RiadhaTrack ESP32 timing unit
 
-This firmware runs directly on a NodeMCU ESP8266 board. It connects to local Wi-Fi and interfaces directly with the FastAPI backend database and Mosquitto broker.
+This firmware targets a generic ESP32 DevKit with a 16×2 I²C LCD, direct 4×4 keypad, and one IR finish sensor. The keypad starts a test; the IR sensor finishes it. Results are delivered via MQTT to the FastAPI backend, which stores them in SQLite.
 
-## Hardware and Pinout
+## Wiring
 
-| Component | Connection on module | ESP8266 pin label on board | GPIO | Notes |
-|---|---|---|---|---|
-| **LCD (I²C)** | SDA | IO4 | GPIO4 | I²C data line |
-| **LCD (I²C)** | SCL | IO5 | GPIO5 | I²C clock line |
-| **LCD** | GND | GND | — | Power ground |
-| **LCD** | VCC | 3V3 / Vin | — | 3.3V or 5V with level-friendly I²C |
-| **Keypad** | R1 | IO14 | GPIO14 | Row 1 |
-| **Keypad** | R2 | IO12 | GPIO12 | Row 2 |
-| **Keypad** | R3 | IO13 | GPIO13 | Row 3 |
-| **Keypad** | R4 | IO15 | GPIO15 | Row 4 |
-| **Keypad** | C1 | IO0 | GPIO0 | Column 1 |
-| **Keypad** | C2 | IO2 | GPIO2 | Column 2 |
-| **Keypad** | C3 | RXD0 | GPIO3 | Column 3 |
-| **Keypad** | C4 | TXD0 | GPIO1 | Column 4 |
-| **IR Sensor** | OUT / DO | IO16 | GPIO16 | High-speed optical finish gate |
-| **IR Sensor** | GND | GND | — | Power ground |
-| **IR Sensor** | VCC | 3V3 | — | 3.3V power |
+`Dxx` refers to the pin numbered `xx` on the ESP32 board.
 
-## Operator & Screen Flow (16×2 LCD)
+| Component | Connection | ESP32 pin |
+|---|---|---|
+| LCD | SDA | D21 |
+| LCD | SCL | D22 |
+| LCD | VCC / GND | 3V3 / GND |
+| Keypad | R1, R2, R3, R4 | D13, D12, D14, D27 |
+| Keypad | C1, C2, C3, C4 | D26, D25, D33, D32 |
+| IR finish sensor | OUT | D19 |
+| IR finish sensor | VCC / GND | 3V3 / GND |
 
-1. **Power On / Boot**:
-   - The 16×2 LCD displays for **4 seconds**:
-     ```text
-        RiadhaTrac   
-     Welcome athlete!
-     ```
-2. **Main Menu**:
-   - The LCD presents two options:
-     ```text
-     1:Select 2:Start
-     Ath: Eliud
-     ```
-     *(Shows `No athlete sel.` if no athlete has been selected yet).*
-3. **Select Athlete (`1`)**:
-   - Press **`1`** on the keypad:
-     ```text
-     Enter ID: 101   
-     #=OK      *=Back
-     ```
-   - Enter digits `0`–`9` (`*` backspaces, `#` confirms).
-   - The ESP8266 queries the database (`GET /api/device/athlete/<id>`) over Wi-Fi.
-   - When found, it fetches the athlete's **first name** from SQLite:
-     ```text
-     Ath: Eliud      
-     2:Start   *:Menu
-     ```
-   - If not found in SQLite:
-     ```text
-     Athlete Not inDB
-     *=Back to Menu  
-     ```
-4. **Start Timer (`2`)**:
-   - Press **`2`**: The timer starts counting immediately:
-     ```text
-     Run: Eliud      
-     Time: 3.420 s   
-     ```
-   - When the runner reaches the IR sensor (connected to GPIO16), the beam triggers and the timer stops automatically.
-   - The result is immediately recorded under that athlete in the SQLite database (`POST /api/device/results` & MQTT).
-   - Once stored, the LCD displays:
-     ```text
-     Time: 11.840 s  
-     Saved! 2=Run #=M
-     ```
-   - Pressing **`2`** immediately runs the timer again for the same athlete, or **`#`** / **`*`** returns to the main menu.
+The keypad is a passive eight-wire matrix: do not connect VCC or GND to it. All component grounds must be common. Use 3.3V-compatible sensor output levels.
 
-## Uploading to ESP8266
+## Keypad operation
 
-1. Ensure `Hardware/include/secrets.h` is configured with your Wi-Fi SSID, password, and the LAN IP of your backend laptop.
-2. Connect the ESP8266 via USB.
-3. Build and upload with PlatformIO:
-   ```powershell
-   cd Hardware
-   pio run --target upload
-   ```
+1. Startup: `RiadhaTrack` / `Welcome Athlete`.
+2. Press `A`, type a registered athlete ID, then press `#` or `D` to confirm it.
+3. Press `B` to manually start the timer.
+4. Trigger the IR sensor to stop the timer.
+5. The device stores the result locally, sends it to MQTT, and the dashboard shows it under that athlete after the backend acknowledges it.
+
+`C` clears an athlete ID, while `A`, `C`, or `*` cancels a running test.
+
+## Configure and upload
+
+Copy `include/secrets.example.h` to `include/secrets.h`, fill in Wi‑Fi and MQTT details, then run:
+
+```powershell
+pio run
+pio run --target upload
+```
+
+Use the broker and backend setup described in `../backend/README.md`.
