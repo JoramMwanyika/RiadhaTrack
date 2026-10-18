@@ -1,6 +1,46 @@
-# RiadhaTrack
+<p align="center">
+  <img src="frontend/public/riadha-track-logo.png" alt="RiadhaTrack logo" width="320">
+</p>
 
-RiadhaTrack is a local timing system for athletics. An ESP32 timing unit measures a run, sends the finished result to an MQTT broker, and the FastAPI backend validates and stores it in SQLite. Coaches use the React dashboard to register athletes and view results.
+<h1 align="center">RiadhaTrack</h1>
+
+<p align="center">
+  <strong>Offline-first athletics timing and performance records for grassroots programmes.</strong><br>
+  Built for reliable local operation—even when the internet is unavailable.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Mode-Offline--first-1b6ca8?style=flat-square" alt="Offline-first">
+  <img src="https://img.shields.io/badge/Hardware-ESP32-00979D?style=flat-square" alt="ESP32">
+  <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Database-SQLite-003B57?style=flat-square" alt="SQLite">
+  <img src="https://img.shields.io/badge/Messaging-MQTT-660066?style=flat-square" alt="MQTT">
+</p>
+
+> **Prototype notice:** RiadhaTrack supports repeatable training and talent-development records. It is not certified as an official competition-timing or photo-finish system. Validate sensors and timing accuracy in the intended field conditions before relying on measurements.
+
+## The project
+
+RiadhaTrack is a low-cost, local athletics testing system designed for grassroots programmes. It replaces stopwatch-and-notebook workflows with a simple connected flow: a coach identifies an athlete on the timing unit, starts a test, captures a finish, and sees the stored performance in a browser dashboard.
+
+The current implementation uses an **ESP32** timing unit, a local **Mosquitto** broker, a **FastAPI** backend, **SQLite** storage, and a **React** dashboard. Everything runs on a trusted local Wi-Fi network, so timing and record access can continue without internet connectivity.
+
+| Built for | What it provides |
+| --- | --- |
+| Coaches and test operators | Simple athlete selection, test control, and an accessible results history |
+| Schools and clubs | A low-cost local record of athletes, timed tests, and device activity |
+| Athletes | A consistent performance history that coaches can review over time |
+| Field operation | Local result queuing and automatic retry after a temporary Wi-Fi, broker, or server outage |
+
+### Key capabilities
+
+- **Reliable result delivery:** the ESP32 saves a result before it sends it, then removes it only after the backend confirms durable storage.
+- **Private local operation:** athlete data, MQTT traffic, and the dashboard remain within the local network by default.
+- **One source of truth:** FastAPI validates every result and writes it to SQLite; MQTT transports messages but is not the database.
+- **Coach-friendly dashboard:** register athletes, view result history, filter tests, and inspect device status in a browser.
+- **Safer device access:** per-device MQTT accounts and topic access rules limit each unit to its own messages.
+
+## How it works
 
 ```text
 ESP32 timing unit --Wi-Fi/MQTT--> Mosquitto --MQTT--> FastAPI --> SQLite
@@ -10,6 +50,31 @@ ESP32 timing unit --Wi-Fi/MQTT--> Mosquitto --MQTT--> FastAPI --> SQLite
 ```
 
 The browser never connects to MQTT or SQLite. The backend is the only component that writes timing results to the database.
+
+<details>
+<summary><strong>End-to-end result lifecycle</strong></summary>
+
+1. The coach selects a registered athlete and starts a test on the ESP32.
+2. The IR finish sensor completes the run; the ESP32 calculates elapsed time and stores the result in local EEPROM.
+3. The device publishes the result to Mosquitto using MQTT QoS 1.
+4. FastAPI validates the message, prevents duplicate inserts, and commits it to SQLite.
+5. FastAPI returns a `stored` acknowledgement to the device.
+6. The ESP32 clears its pending record, and the dashboard shows the result on its next refresh.
+
+</details>
+
+## Contents
+
+- [What you need](#what-you-need)
+- [Quick start order](#quick-start-order)
+- [Start MQTT (Mosquitto)](#1-start-mqtt-mosquitto)
+- [Configure the backend and database](#2-configure-the-backend-and-database)
+- [Start the frontend](#3-start-the-frontend-and-connect-it-to-the-backend)
+- [Wire the ESP32 hardware](#4-wire-the-esp32-timing-hardware)
+- [Connect hardware to MQTT, backend, and database](#5-connect-hardware-to-mqtt-backend-and-database)
+- [Run an end-to-end test](#6-run-an-end-to-end-test)
+- [Day-to-day operation](#day-to-day-operation)
+- [Verification and troubleshooting](#verification-and-troubleshooting)
 
 ## What you need
 
