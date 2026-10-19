@@ -255,4 +255,14 @@ def list_results(event: str | None = None, distance_m: float | None = Query(defa
 def list_devices(user=Depends(current_user)):
     with connection() as db:
         rows = db.execute("SELECT * FROM devices ORDER BY last_seen_at DESC").fetchall()
-    return [dict(row) for row in rows]
+    now = datetime.now(timezone.utc)
+    devices = []
+    for row in rows:
+        device = dict(row)
+        try:
+            last_seen = datetime.fromisoformat(device["last_seen_at"].replace("Z", "+00:00")) if device["last_seen_at"] else None
+            device["status"] = "online" if last_seen and now - last_seen <= timedelta(seconds=45) else "offline"
+        except ValueError:
+            device["status"] = "unknown"
+        devices.append(device)
+    return devices

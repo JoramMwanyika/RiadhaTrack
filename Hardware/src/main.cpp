@@ -42,6 +42,7 @@ constexpr unsigned long MAX_TEST_MS = 120000;
 constexpr unsigned long RUNNING_DISPLAY_MS = 100;
 constexpr unsigned long RETRY_MS = 10000;
 constexpr unsigned long RECONNECT_MS = 10000;
+constexpr unsigned long STATUS_PUBLISH_MS = 30000;
 constexpr uint32_t PENDING_MAGIC = 0x52544533;
 constexpr int EEPROM_BYTES = 512;
 constexpr int BOOT_COUNTER_ADDRESS = 0;
@@ -70,6 +71,7 @@ PendingResult pending{};
 char athleteId[17] = "";
 char resultsTopic[96];
 char ackTopic[128];
+char statusTopic[96];
 uint32_t bootCounter = 0;
 uint32_t sequence = 0;
 unsigned long screenChangedAt = 0;
@@ -77,6 +79,7 @@ unsigned long timerStartedUs = 0;
 unsigned long lastPublishAt = 0;
 unsigned long lastConnectAt = 0;
 unsigned long lastTimerDisplayAt = 0;
+unsigned long lastStatusPublishAt = 0;
 unsigned long resultElapsedMs = 0;
 bool pendingLoaded = false;
 bool finishSensorWasClear = false;
@@ -201,6 +204,20 @@ void publishPending() {
   lastPublishAt = millis();
 }
 
+void publishStatus() {
+  if (!mqtt.connected()) return;
+  JsonDocument document;
+  document["schema_version"] = 1;
+  document["device_id"] = RIADHA_DEVICE_ID;
+  document["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+  document["mqtt_connected"] = mqtt.connected();
+  if (WiFi.status() == WL_CONNECTED) document["wifi_rssi"] = WiFi.RSSI();
+  document["firmware_version"] = "0.1.0";
+  const size_t payloadSize = measureJson(document);
+  if (!mqtt.beginMessage(statusTopic, payloadSize, true, 1)) return;
+  if (serializeJson(document, mqtt) == payloadSize && mqtt.endMessage()) lastStatusPublishAt = millis();
+}
+
 void onMqttMessage(int) {
   JsonDocument document;
   if (deserializeJson(document, mqtt)) return;
@@ -233,7 +250,10 @@ void ensureMqtt() {
     lastConnectAt = millis();
     mqtt.setId(RIADHA_DEVICE_ID);
     mqtt.setUsernamePassword(RIADHA_MQTT_USERNAME, RIADHA_MQTT_PASSWORD);
-    if (mqtt.connect(RIADHA_MQTT_HOST, RIADHA_MQTT_PORT)) mqtt.subscribe(ackTopic, 1);
+    if (mqtt.connect(RIADHA_MQTT_HOST, RIADHA_MQTT_PORT)) {
+      mqtt.subscribe(ackTopic, 1);
+      publishStatus();
+    }
   }
   if (mqtt.connected()) mqtt.poll();
 }
@@ -331,6 +351,7 @@ void setup() {
   sequence = pendingLoaded ? pending.sequence : 0;
   snprintf(resultsTopic, sizeof(resultsTopic), "%s/devices/%s/results", RIADHA_MQTT_PREFIX, RIADHA_DEVICE_ID);
   snprintf(ackTopic, sizeof(ackTopic), "%s/devices/%s/acks/+", RIADHA_MQTT_PREFIX, RIADHA_DEVICE_ID);
+  snprintf(statusTopic, sizeof(statusTopic), "%s/devices/%s/status", RIADHA_MQTT_PREFIX, RIADHA_DEVICE_ID);
   Wire.begin(LCD_SDA_D, LCD_SCL_D);
   Wire.setClock(100000);
   lcd.init();
@@ -356,6 +377,7 @@ void loop() {
     screenChangedAt = now;
   }
   if (pendingLoaded && now - lastPublishAt >= RETRY_MS) publishPending();
+  if (mqtt.connected() && now - lastStatusPublishAt >= STATUS_PUBLISH_MS) publishStatus();
   if ((screen == SHOW_RESULT || screen == MESSAGE) && now - screenChangedAt >= 4000) changeScreen(pendingLoaded ? PENDING_SYNC : MENU);
   const char key = keypad.getKey();
   if (key) handleKey(key);

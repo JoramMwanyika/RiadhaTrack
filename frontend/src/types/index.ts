@@ -75,6 +75,9 @@ export interface Device {
   lastResult?: ResultSummary;
   batteryPercent?: number;
   location?: string;
+  wifiConnected?: boolean;
+  mqttConnected?: boolean;
+  wifiRssi?: number;
 }
 
 export interface DashboardSummary {

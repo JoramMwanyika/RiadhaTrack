@@ -4,9 +4,9 @@ from paho.mqtt.client import Client, CallbackAPIVersion
 from pydantic import ValidationError
 
 from .config import settings
-from .schemas import DeviceResult
-from .services import queue_device_result
-from .topics import device_results, result_ack
+from .schemas import DeviceResult, DeviceStatus
+from .services import queue_device_result, store_device_status
+from .topics import device_results, device_status, result_ack
 
 LOGGER = logging.getLogger(__name__)
 class MqttIngestor:
@@ -30,13 +30,26 @@ class MqttIngestor:
             LOGGER.error("MQTT connection failed: %s", reason_code)
             return
         client.subscribe(device_results(), qos=1)
+        client.subscribe(device_status("+"), qos=1)
 
     def on_message(self, client, userdata, message) -> None:
         parts = message.topic.split("/")
         prefix_parts = settings.mqtt_topic_prefix.split("/")
-        if len(parts) != len(prefix_parts) + 3 or parts[:len(prefix_parts)] != prefix_parts or parts[-1] != "results" or parts[-3] != "devices":
+        if len(parts) != len(prefix_parts) + 3 or parts[:len(prefix_parts)] != prefix_parts or parts[-3] != "devices":
             return
         device_id = parts[-2]
+        if parts[-1] == "status":
+            try:
+                body = json.loads(message.payload.decode("utf-8"))
+                validate_fn = getattr(DeviceStatus, "model_validate", getattr(DeviceStatus, "parse_obj", None))
+                payload = validate_fn(body)
+                if payload.device_id == device_id:
+                    store_device_status(payload)
+            except (json.JSONDecodeError, ValidationError):
+                LOGGER.warning("Ignored invalid status message from %s", device_id)
+            return
+        if parts[-1] != "results":
+            return
         result_id = "unknown"
         try:
             body = json.loads(message.payload.decode("utf-8"))

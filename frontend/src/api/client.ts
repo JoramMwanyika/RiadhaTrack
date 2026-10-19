@@ -5,7 +5,7 @@ let authToken: string | null = null;
 
 type ApiAthlete = { athlete_id: string; display_name: string; age_group?: string | null; school_club?: string | null; preferred_event?: string | null; consent_status: 'pending' | 'granted' | 'withdrawn'; created_at: string };
 type ApiResult = { result_id: string; athlete_id: string; device_id: string; event: string; distance_m: number; elapsed_ms: number; quality: Result['quality']; received_at: string };
-type ApiDevice = { device_id: string; label?: string | null; firmware_version?: string | null; last_seen_at?: string | null; status: Device['status'] };
+type ApiDevice = { device_id: string; label?: string | null; firmware_version?: string | null; last_seen_at?: string | null; status: Device['status']; wifi_connected?: boolean | number | null; mqtt_connected?: boolean | number | null; wifi_rssi?: number | null };
 export type PendingResult = { result_id: string; athlete_id: string; device_id: string; event: string; distance_m: number; elapsed_ms: number; quality: Result['quality']; received_at: string };
 
 function normalizeAthlete(a: ApiAthlete): AthleteSummary {
@@ -15,7 +15,7 @@ function normalizeResult(r: ApiResult): Result {
   return { id: r.result_id, athleteId: r.athlete_id, event: r.event, distance: r.distance_m, timeMs: r.elapsed_ms, deviceId: r.device_id, recordedAt: r.received_at, quality: r.quality };
 }
 function normalizeDevice(d: ApiDevice): Device {
-  return { id: d.device_id, name: d.label || d.device_id, status: d.status, lastSeenAt: d.last_seen_at ?? undefined, firmwareVersion: d.firmware_version ?? undefined };
+  return { id: d.device_id, name: d.label || d.device_id, status: d.status, lastSeenAt: d.last_seen_at ?? undefined, firmwareVersion: d.firmware_version ?? undefined, wifiConnected: d.wifi_connected == null ? undefined : Boolean(d.wifi_connected), mqttConnected: d.mqtt_connected == null ? undefined : Boolean(d.mqtt_connected), wifiRssi: d.wifi_rssi ?? undefined };
 }
 
 export function setToken(token: string) { authToken = token; sessionStorage.setItem('rt_token', token); }

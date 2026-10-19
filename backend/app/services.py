@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from .database import connection
-from .schemas import DeviceResult
+from .schemas import DeviceResult, DeviceStatus
 
 
 def utc_now() -> str:
@@ -61,6 +61,22 @@ def queue_device_result(payload: DeviceResult) -> tuple[str, str | None]:
                     payload.timing.quality, now,
                     payload.device_time_utc.isoformat() if payload.device_time_utc else None, payload.sequence))
     return "pending", None
+
+
+def store_device_status(payload: DeviceStatus) -> None:
+    """Record the latest connection telemetry reported by a timing device."""
+    with connection() as db:
+        db.execute("""INSERT INTO devices(device_id, firmware_version, last_seen_at, status,
+                      wifi_connected, mqtt_connected, wifi_rssi)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)
+                      ON CONFLICT(device_id) DO UPDATE SET
+                      firmware_version=COALESCE(excluded.firmware_version, devices.firmware_version),
+                      last_seen_at=excluded.last_seen_at, status=excluded.status,
+                      wifi_connected=excluded.wifi_connected, mqtt_connected=excluded.mqtt_connected,
+                      wifi_rssi=excluded.wifi_rssi""",
+                   (payload.device_id, payload.firmware_version, utc_now(),
+                    "online" if payload.mqtt_connected else "offline",
+                    int(payload.wifi_connected), int(payload.mqtt_connected), payload.wifi_rssi))
 
 
 def approve_pending_result(result_id: str) -> tuple[str, dict | None]:

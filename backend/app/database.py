@@ -49,7 +49,8 @@ def initialize_database() -> None:
             );
             CREATE TABLE IF NOT EXISTS devices (
                 device_id TEXT PRIMARY KEY, label TEXT, firmware_version TEXT,
-                last_seen_at TEXT, status TEXT NOT NULL DEFAULT 'unknown', last_result_id TEXT
+                last_seen_at TEXT, status TEXT NOT NULL DEFAULT 'unknown', last_result_id TEXT,
+                wifi_connected INTEGER, mqtt_connected INTEGER, wifi_rssi INTEGER
             );
             CREATE TABLE IF NOT EXISTS test_sessions (
                 session_id TEXT PRIMARY KEY, athlete_id TEXT NOT NULL, device_id TEXT NOT NULL,
@@ -82,6 +83,16 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_results_filters ON results(event, distance_m, received_at DESC);
             CREATE INDEX IF NOT EXISTS idx_pending_results_received ON pending_results(received_at DESC);
         """)
+        # Existing installations predate device connection telemetry. SQLite
+        # only supports additive migrations here, so keep them idempotent.
+        device_columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+        for column, definition in (
+            ("wifi_connected", "INTEGER"),
+            ("mqtt_connected", "INTEGER"),
+            ("wifi_rssi", "INTEGER"),
+        ):
+            if column not in device_columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {column} {definition}")
         existing = db.execute("SELECT 1 FROM users WHERE username = ?", (settings.admin_username,)).fetchone()
         if not existing:
             from datetime import datetime, timezone
